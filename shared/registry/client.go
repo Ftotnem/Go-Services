@@ -47,9 +47,9 @@ func (rc *RegistryClient) GetActiveServices(ctx context.Context, serviceType str
 			log.Printf("WARNING: RegistryClient: Failed to unmarshal ServiceInfo for ID %s (type %s): %v", instanceID, serviceType, err)
 			continue // Skip malformed entries, they'll be cleaned up by cleanupLoop in registrar
 		}
-
+		lastSeenTime := time.UnixMilli(info.LastSeen)
 		// Consider service active if its last heartbeat was within the ServiceTimeout
-		if currentTime.Sub(info.LastSeen) <= rc.serviceTimeout {
+		if currentTime.Sub(lastSeenTime) <= rc.serviceTimeout {
 			activeServices[instanceID] = info
 		}
 	}

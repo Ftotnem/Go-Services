@@ -99,7 +99,7 @@ func (sr *ServiceRegistrar) registerService() {
 		ServiceType: sr.serviceType,
 		IP:          sr.cfg.ServiceIP,   // <--- Use commonConfig
 		Port:        sr.cfg.ServicePort, // <--- Use commonConfig
-		LastSeen:    time.Now(),
+		LastSeen:    time.Now().Unix(),
 		Metadata:    map[string]string{"version": "1.0"}, // Still add metadata if desired
 	}
 
@@ -160,8 +160,9 @@ func (sr *ServiceRegistrar) performCleanup() {
 			}
 			continue
 		}
+		lastSeenTime := time.UnixMilli(info.LastSeen)
 
-		if currentTime.Sub(info.LastSeen) > sr.cfg.HeartbeatTTL { // <--- Use commonConfig
+		if currentTime.Sub(lastSeenTime) > sr.cfg.HeartbeatTTL { // <--- Use commonConfig
 			if _, delErr := sr.redisClient.HDel(ctx, hashKey, instanceID).Result(); delErr != nil {
 				log.Printf("ERROR: Cleanup: Failed to delete stale service %s (ID: %s) for type %s: %v",
 					info.ServiceType, instanceID, sr.serviceType, delErr)
