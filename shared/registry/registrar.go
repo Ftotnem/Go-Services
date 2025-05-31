@@ -99,7 +99,7 @@ func (sr *ServiceRegistrar) registerService() {
 		ServiceType: sr.serviceType,
 		IP:          sr.cfg.ServiceIP,   // <--- Use commonConfig
 		Port:        sr.cfg.ServicePort, // <--- Use commonConfig
-		LastSeen:    time.Now().Unix(),
+		LastSeen:    time.Now().UnixMilli(),
 		Metadata:    map[string]string{"version": "1.0"}, // Still add metadata if desired
 	}
 
