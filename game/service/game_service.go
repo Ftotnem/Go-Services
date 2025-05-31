@@ -97,75 +97,60 @@ func (gs *GameService) PlayerOnline(ctx context.Context, playerUUID string) erro
 	return nil
 }
 
-// PlayerOffline marks a player as offline, calculates playtime, updates Redis, and triggers persistence.
+// PlayerOffline marks a player as offline, retrieves their final accumulated playtime from Redis,
+// persists it to the Player Service (MongoDB), and then cleans up all player-specific keys in Redis.
 func (gs *GameService) PlayerOffline(ctx context.Context, playerUUID string) error {
-	// 1. Get session start time from Redis
-	sessionStartTime, err := gs.OnlinePlayersStore.GetPlayerOnlineTime(ctx, playerUUID)
+	log.Printf("Service: Handling player %s going offline.", playerUUID)
+
+	// 1. Retrieve the player's final total playtime from Redis.
+	// This `totalPlaytime` should already be updated by the game's tick/increment logic.
+	finalTotalPlaytime, err := gs.PlayerPlaytimeStore.GetPlayerPlaytime(ctx, playerUUID)
 	if err != nil {
-		if err == redis.Nil {
-			log.Printf("Service: Player %s not found in online sessions or already offline. Skipping offline handling.", playerUUID)
-			return nil // Not a critical error for this flow
+		if _, ok := err.(interface{ IsNil() bool }); ok && err.(interface{ IsNil() bool }).IsNil() { // Check for redis.Nil or custom ErrRedisKeyNotFound
+			log.Printf("INFO: Player %s had no recorded playtime in Redis (key non-existent or expired). Persisting 0.0 playtime.", playerUUID)
+			finalTotalPlaytime = 0.0 // Default to 0 if no playtime record found
+		} else {
+			// This is a more critical error (e.g., network issue, Redis corruption)
+			return fmt.Errorf("failed to retrieve final total playtime for player %s from Redis: %w", playerUUID, err)
 		}
-		return fmt.Errorf("failed to get player %s online start time from Redis: %w", playerUUID, err)
-	}
-
-	// 2. Calculate playtime for this session
-	sessionPlaytime := time.Since(sessionStartTime).Seconds()
-	log.Printf("Service: Player %s was online for %.2f seconds.", playerUUID, sessionPlaytime)
-
-	// 3. Update player's total playtime and delta playtime in Redis
-	// Get current total playtime to increment it
-	currentTotalPlaytime, err := gs.PlayerPlaytimeStore.GetPlayerPlaytime(ctx, playerUUID)
-	if err != nil && err != redis.Nil { // It might be nil if player was not fully initialized, handle gracefully
-		log.Printf("Warning: Failed to get current total playtime for %s: %v. Proceeding with delta.", playerUUID, err)
-		currentTotalPlaytime = 0 // Default to 0 if an error (not nil) occurs.
-	}
-	newTotalPlaytime := currentTotalPlaytime + sessionPlaytime
-	err = gs.PlayerPlaytimeStore.SetPlayerPlaytime(ctx, playerUUID, newTotalPlaytime)
-	if err != nil {
-		log.Printf("Warning: Failed to update total playtime for player %s in Redis: %v", playerUUID, err)
-	}
-
-	err = gs.PlayerPlaytimeStore.SetPlayerDeltaPlaytime(ctx, playerUUID, sessionPlaytime)
-	if err != nil {
-		log.Printf("Warning: Failed to set delta playtime for player %s in Redis: %v", playerUUID, err)
-	}
-
-	// 4. Update team total playtime in Redis
-	playerTeamKey := fmt.Sprintf(redisu.PlayerTeamKeyPrefix, playerUUID)
-	teamID, err := gs.RedisClient.Get(ctx, playerTeamKey).Result()
-	if err == redis.Nil {
-		log.Printf("Warning: Player %s has no team assigned in Redis (key %s). Cannot increment team playtime.", playerUUID, playerTeamKey)
-	} else if err != nil {
-		log.Printf("Warning: Failed to get team ID for player %s from Redis: %v", playerUUID, err)
 	} else {
-		err = gs.TeamPlaytimeStore.IncrementTeamPlaytime(ctx, teamID, sessionPlaytime)
-		if err != nil {
-			log.Printf("Warning: Failed to increment team %s playtime in Redis for player %s: %v", teamID, playerUUID, err)
-		}
+		log.Printf("Service: Player %s final total playtime from Redis: %.2f seconds.", playerUUID, finalTotalPlaytime)
 	}
 
-	// 5. Remove player from online status in Redis
-	err = gs.OnlinePlayersStore.RemovePlayerOnline(ctx, playerUUID)
+	// 2. Persist the final accumulated total playtime to the Player Service (MongoDB).
+	// This is the authoritative save operation.
+	err = gs.PlayerServiceClient.UpdatePlayerPlaytime(ctx, playerUUID, finalTotalPlaytime)
 	if err != nil {
-		return fmt.Errorf("failed to remove player %s from online status in Redis: %w", playerUUID, err)
+		// Log the error but continue with Redis cleanup. Persistence should ideally
+		// have a robust retry/dead-letter queue mechanism for critical data.
+		log.Printf("ERROR: Failed to persist player %s total playtime (%.2f) to Player Service (MongoDB): %v", playerUUID, finalTotalPlaytime, err)
+		// Optionally, decide if this error should block further cleanup or be retried.
+		// For now, we'll continue cleanup to free up Redis resources.
+	} else {
+		log.Printf("Service: Player %s total playtime (%.2f) successfully persisted to Player Service (MongoDB).", playerUUID, finalTotalPlaytime)
 	}
 
-	// 6. Persist updated total playtime to Player Service (MongoDB)
-	err = gs.PlayerServiceClient.UpdatePlayerPlaytime(ctx, playerUUID, newTotalPlaytime)
+	// 3. Clean up all player-specific keys in Redis.
+	// These keys will be re-set when the player comes online next.
+	keysToDelete := []string{
+		fmt.Sprintf(redisu.OnlineKeyPrefix, playerUUID),        // Marks player online status
+		fmt.Sprintf(redisu.PlaytimeKeyPrefix, playerUUID),      // Player's total accumulated playtime in Redis cache
+		fmt.Sprintf(redisu.DeltaPlaytimeKeyPrefix, playerUUID), // Player's current session delta playtime
+		fmt.Sprintf(redisu.PlayerTeamKeyPrefix, playerUUID),    // Player's assigned team ID
+		// Add any other player-specific keys that should be ephemeral per session
+	}
+
+	// Use a pipeline for atomic deletion of multiple keys if they are in the same slot,
+	// or simply `Del` them if they might be in different slots (Redis Cluster handles this).
+	// In Redis Cluster, `DEL` can take multiple keys across slots.
+	deletedCount, err := gs.RedisClient.Del(ctx, keysToDelete...).Result()
 	if err != nil {
-		log.Printf("Error: Failed to persist player %s total playtime to Player Service: %v", playerUUID, err)
-		// Consider implementing a retry mechanism or a dead-letter queue here
+		// This is a significant error during cleanup.
+		return fmt.Errorf("failed to delete all player %s related keys from Redis: %w", playerUUID, err)
 	}
+	log.Printf("Service: Cleaned up %d Redis keys for player %s.", deletedCount, playerUUID)
 
-	// 7. Clean up other player-specific keys in Redis (e.g., team key)
-	if err = gs.RedisClient.Del(ctx, playerTeamKey).Err(); err != nil {
-		log.Printf("Warning: Failed to delete player team key %s from Redis: %v", playerTeamKey, err)
-	}
-	// Add other keys related to player session if they exist and need cleanup
-	// E.g., if there were specific in-game session data stored with a UUID prefix
-
-	log.Printf("Service: Player %s marked offline. Playtime updated and data persisted to DB.", playerUUID)
+	log.Printf("Service: Player %s is now fully offline and Redis keys cleaned.", playerUUID)
 	return nil
 }
 

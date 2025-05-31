@@ -120,7 +120,7 @@ func (gu *GameUpdater) performGameTick() {
 		return
 	}
 
-	log.Printf("Performing game tick for %d players assigned to this instance.", len(playersToUpdate))
+	//log.Printf("Performing game tick for %d players assigned to this instance.", len(playersToUpdate))
 
 	for _, uuid := range playersToUpdate {
 		if err := gu.playerPlaytimeStore.IncrementPlayerPlaytime(gu.ctx, uuid); err != nil {

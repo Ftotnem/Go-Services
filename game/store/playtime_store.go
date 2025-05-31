@@ -103,7 +103,7 @@ func (pps *PlayerPlaytimeStore) IncrementPlayerPlaytime(ctx context.Context, pla
 	teamID, err := pps.redisClient.Get(ctx, playerTeamKey).Result()
 	if err == redis.Nil {
 		// If no team ID is found, log a warning but proceed with player playtime increment.
-		log.Printf("WARNING: Team ID key %s not found for player %s. Player playtime will be incremented, but team playtime will not be updated.", playerTeamKey, playerUUID)
+		//log.Printf("WARNING: Team ID key %s not found for player %s. Player playtime will be incremented, but team playtime will not be updated.", playerTeamKey, playerUUID)
 
 		// Execute player playtime increment atomically.
 		// NOTE: The delta key is NOT deleted here as per new requirement.
@@ -149,8 +149,7 @@ func (pps *PlayerPlaytimeStore) IncrementPlayerPlaytime(ctx context.Context, pla
 		return fmt.Errorf("team total playtime increment failed for team %s: %w", teamID, teamIncrCmd.Err())
 	}
 
-	log.Printf("Successfully incremented total playtime for player %s by %.2f (new player total: %.2f) and team %s by %.2f (new team total: %.2f). Delta NOT consumed.",
-		playerUUID, deltaFloat, playerIncrCmd.Val(), teamID, deltaFloat, teamIncrCmd.Val())
+	//log.Printf("Successfully incremented total playtime for player %s by %.2f (new player total: %.2f) and team %s by %.2f (new team total: %.2f). Delta NOT consumed.",	playerUUID, deltaFloat, playerIncrCmd.Val(), teamID, deltaFloat, teamIncrCmd.Val())
 
 	return nil
 }

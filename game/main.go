@@ -12,6 +12,7 @@ import (
 	gameapi "github.com/Ftotnem/GO-SERVICES/game/api" // Assuming you have a game API package
 	"github.com/Ftotnem/GO-SERVICES/game/service"     // The game service business logic
 	"github.com/Ftotnem/GO-SERVICES/game/store"       // The Redis-only stores
+	"github.com/Ftotnem/GO-SERVICES/game/syncer"
 	"github.com/Ftotnem/GO-SERVICES/game/updater"
 	"github.com/Ftotnem/GO-SERVICES/shared/api"
 	"github.com/Ftotnem/GO-SERVICES/shared/config"
@@ -79,6 +80,10 @@ func main() {
 	updater := updater.NewGameUpdater(cfg, registryClient, onlinePlayersStore, playerPlaytimeStore, registrar)
 	go updater.Start()
 	defer updater.Stop()
+
+	syncer := syncer.NewPlaytimeSyncer(cfg, playerPlaytimeStore, teamPlaytimeStore, *playerserviceclient, registryClient, registrar)
+	go syncer.Start()
+	defer syncer.Stop()
 
 	// --- 7. Setup HTTP Server and Register Routes ---
 	baseServer := api.NewBaseServer(cfg.ListenAddr, log.Default()) // Assumes NewBaseServer takes address and sets up mux.Router

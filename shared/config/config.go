@@ -10,8 +10,6 @@ import (
 	"time"
 )
 
-
-
 // CommonConfig holds configuration fields that are shared across multiple services.
 type CommonConfig struct {
 	RedisAddrs              []string      // Redis server addresses (e.g., "redis-cluster:6379")
@@ -32,6 +30,8 @@ type GameServiceConfig struct {
 	PlayerServiceURL          string        // The URL to the used player-service (e.g., "http://player-service:8081")
 	GameServiceInstanceID     int           // Unique identifier for this game service instance (e.g., 0, 1, 2 for sharding)
 	TotalGameServiceInstances int           // Total number of active game service instances (e.g., 1, 3 for sharding)
+	BackupTimeout             time.Duration // NEW: Timeout for the full player playtime backup operation (e.g., 60 seconds)
+	SyncTimeout               time.Duration // NEW: Timeout for the team total sync operation (e.g., 30 seconds)
 }
 
 // PlayerServiceConfig holds configuration specific to the player-service.
@@ -156,7 +156,7 @@ func LoadGameServiceConfig() (*GameServiceConfig, error) {
 		cfg.ListenAddr = ":8082"
 	}
 	if cfg.PlayerServiceURL == "" {
-		cfg.PlayerServiceURL = "http://player-service:8081" // Default for K8s internal DNS
+		cfg.PlayerServiceURL = "http://localhost:8081" //"http://player-service:8081" // Default for K8s internal DNS
 	}
 
 	// Extract ServicePort from ListenAddr
@@ -193,6 +193,18 @@ func LoadGameServiceConfig() (*GameServiceConfig, error) {
 	}
 	if cfg.GameServiceInstanceID < 0 || cfg.GameServiceInstanceID >= cfg.TotalGameServiceInstances {
 		return nil, fmt.Errorf("GAME_SERVICE_INSTANCE_ID (%d) must be non-negative and less than TOTAL_GAME_SERVICE_INSTANCES (%d)", cfg.GameServiceInstanceID, cfg.TotalGameServiceInstances)
+	}
+
+	backupTimeoutStr := os.Getenv("GAME_BACKUP_TIMEOUT")
+	cfg.BackupTimeout, err = time.ParseDuration(backupTimeoutStr)
+	if err != nil {
+		cfg.BackupTimeout = 60 * time.Second // Default timeout for the full player playtime backup operation
+	}
+
+	syncTimeoutStr := os.Getenv("GAME_SYNC_TIMEOUT")
+	cfg.SyncTimeout, err = time.ParseDuration(syncTimeoutStr)
+	if err != nil {
+		cfg.SyncTimeout = 30 * time.Second // Default timeout for the team total sync operation
 	}
 
 	return cfg, nil

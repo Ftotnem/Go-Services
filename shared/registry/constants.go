@@ -7,6 +7,8 @@ const (
 	// "services:<serviceType>"
 	// Example: "services:game-service"
 	RedisRegistryHashPrefix = "services:"
+	ServiceTypeProxy        = "proxy:"
+	ServiceTypeMinestom     = "minestom:"
 
 	// Add any other common registry-related constants here
 )
