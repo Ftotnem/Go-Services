@@ -1,3 +1,4 @@
+// game/store/playtime_store.go
 package store
 
 import (
@@ -9,149 +10,164 @@ import (
 	"sync"
 	"time"
 
-	redisu "github.com/Ftotnem/GO-SERVICES/shared/redis"
+	redisu "github.com/Ftotnem/GO-SERVICES/shared/redis" // Correct alias for shared Redis constants
 	"github.com/redis/go-redis/v9"
 )
 
-// PlayerPlaytimeStore handles player playtime operations exclusively in Redis.
-// This store is responsible for maintaining a player's current session playtime
-// in Redis, which will later be periodically synchronized with a Player microservice.
+// PlayerPlaytimeStore manages player playtime and delta playtime data exclusively in Redis.
+// It acts as a fast, in-memory cache for game session data before it's potentially
+// synchronized with a persistent Player microservice.
 type PlayerPlaytimeStore struct {
 	redisClient *redis.ClusterClient
 }
 
-// NewPlayerPlaytimeStore creates a new PlayerPlaytimeStore instance.
+// NewPlayerPlaytimeStore creates a new instance of PlayerPlaytimeStore.
+// It requires a connected Redis Cluster client for all operations.
 func NewPlayerPlaytimeStore(redisClient *redis.ClusterClient) *PlayerPlaytimeStore {
 	return &PlayerPlaytimeStore{
 		redisClient: redisClient,
 	}
 }
 
-// SetPlayerPlaytime sets a player's current total playtime in Redis.
+// SetPlayerPlaytime sets a player's total accumulated playtime in Redis.
+// This is typically used when loading a player's profile or after a major sync.
 func (pps *PlayerPlaytimeStore) SetPlayerPlaytime(ctx context.Context, playerUUID string, totalPlaytime float64) error {
-	playtimeTTL := 6 * time.Hour // Example TTL, adjust as needed
+	// A TTL for total playtime keys can be useful for caching or eventual consistency cleanup.
+	// Adjust this duration based on how often you expect to synchronize with persistent storage.
+	playtimeTTL := 6 * time.Hour
 
-	key := fmt.Sprintf(redisu.PlaytimeKeyPrefix, playerUUID) // <-- Using the constant here
+	// Construct the Redis key using the predefined constant.
+	key := fmt.Sprintf(redisu.PlaytimeKeyPrefix, playerUUID)
 	err := pps.redisClient.Set(ctx, key, totalPlaytime, playtimeTTL).Err()
 	if err != nil {
-		return fmt.Errorf("failed to set playtime for %s in Redis: %w", playerUUID, err)
+		return fmt.Errorf("failed to set total playtime for player %s in Redis: %w", playerUUID, err)
 	}
 
-	log.Printf("Set playtime for player %s in Redis: %.2f seconds", playerUUID, totalPlaytime)
+	log.Printf("Successfully set total playtime for player %s to %.2f seconds (TTL: %s).", playerUUID, totalPlaytime, playtimeTTL)
 	return nil
 }
 
 // GetPlayerPlaytime retrieves a player's current total playtime from Redis.
+// Returns 0.0 and nil if the key does not exist (player has no recorded playtime yet).
 func (pps *PlayerPlaytimeStore) GetPlayerPlaytime(ctx context.Context, playerUUID string) (float64, error) {
-	key := fmt.Sprintf(redisu.PlaytimeKeyPrefix, playerUUID) // <-- Using the constant here
+	// Construct the Redis key using the predefined constant.
+	key := fmt.Sprintf(redisu.PlaytimeKeyPrefix, playerUUID)
 
 	val, err := pps.redisClient.Get(ctx, key).Float64()
 	if err == redis.Nil {
-		return 0.0, nil
+		return 0.0, nil // Player has no recorded playtime yet, or key expired.
 	}
 	if err != nil {
-		return 0.0, fmt.Errorf("failed to get playtime for %s from Redis: %w", playerUUID, err)
+		return 0.0, fmt.Errorf("failed to retrieve total playtime for player %s from Redis: %w", playerUUID, err)
 	}
 
 	return val, nil
 }
 
-// IncrementPlayerPlaytime increments a player's total playtime and their team's total playtime in Redis.
-// It consumes the delta playtime stored in Redis under DeltaPlaytimeKeyPrefix and then clears it.
-func (pps *PlayerPlaytimeStore) IncrementPlayerPlaytime(ctx context.Context, uuid string) error {
-	// Use the correct package alias for constants
-	deltaKey := fmt.Sprintf(redisu.DeltaPlaytimeKeyPrefix, uuid)
-	totalPlaytimeKey := fmt.Sprintf(redisu.PlaytimeKeyPrefix, uuid)
-	playerTeamKey := fmt.Sprintf(redisu.PlayerTeamKeyPrefix, uuid)
+// IncrementPlayerPlaytime atomically increments a player's total playtime
+// and their associated team's total playtime in Redis.
+// It uses the `deltaPlaytime` stored under `DeltaPlaytimeKeyPrefix` but DOES NOT clear it.
+// The delta value will persist until explicitly updated or expired.
+func (pps *PlayerPlaytimeStore) IncrementPlayerPlaytime(ctx context.Context, playerUUID string) error {
+	// Use the correct package alias for constants when constructing keys.
+	deltaKey := fmt.Sprintf(redisu.DeltaPlaytimeKeyPrefix, playerUUID)
+	totalPlaytimeKey := fmt.Sprintf(redisu.PlaytimeKeyPrefix, playerUUID)
+	playerTeamKey := fmt.Sprintf(redisu.PlayerTeamKeyPrefix, playerUUID) // Key to get player's team ID
 
-	// 1. Get the delta value from Redis.
+	// 1. Fetch the delta playtime value.
 	deltaStr, err := pps.redisClient.Get(ctx, deltaKey).Result()
 	if err == redis.Nil {
-		// No delta playtime found for this player, nothing to increment.
+		// No delta playtime found for this player. This is a normal scenario if no recent activity.
+		log.Printf("INFO: No delta playtime found for player %s. Skipping playtime increment.", playerUUID)
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("failed to get delta playtime for %s: %w", uuid, err)
+		return fmt.Errorf("failed to get delta playtime for player %s from Redis: %w", playerUUID, err)
 	}
 
-	// 2. Convert the string delta value to a float64.
+	// 2. Parse the delta playtime string to a float64.
 	deltaFloat, err := strconv.ParseFloat(deltaStr, 64)
 	if err != nil {
-		return fmt.Errorf("failed to parse delta playtime '%s' for %s as float: %w", deltaStr, uuid, err)
+		// Log and return an error if the stored delta value is malformed.
+		return fmt.Errorf("failed to parse delta playtime value '%s' for player %s as float: %w", deltaStr, playerUUID, err)
 	}
 
 	if deltaFloat <= 0 {
-		// If delta is 0 or negative, don't increment. Just clear the key.
-		log.Printf("INFO: Delta playtime for %s is %.2f (<=0). Clearing delta key.", uuid, deltaFloat)
-		_, err := pps.redisClient.Del(ctx, deltaKey).Result()
-		if err != nil {
-			log.Printf("WARNING: Failed to delete delta playtime key %s for %s: %v", deltaKey, uuid, err)
-		}
+		// If the delta is zero or negative, there's nothing to add.
+		// We still log this, but don't perform increments.
+		log.Printf("INFO: Delta playtime for player %s is %.2f (non-positive). No increment performed.", playerUUID, deltaFloat)
 		return nil
 	}
 
-	// 3. Get the team ID for the player.
+	// 3. Get the team ID for the player. This is needed to update team totals.
 	teamID, err := pps.redisClient.Get(ctx, playerTeamKey).Result()
 	if err == redis.Nil {
-		log.Printf("WARN: Team ID key %s not found for player %s. Cannot increment team playtime. Player playtime will still be incremented.", playerTeamKey, uuid)
-		// If no team, we still want to increment player playtime.
-		// Use a simple IncrByFloat for player, and then delete the delta key.
+		// If no team ID is found, log a warning but proceed with player playtime increment.
+		log.Printf("WARNING: Team ID key %s not found for player %s. Player playtime will be incremented, but team playtime will not be updated.", playerTeamKey, playerUUID)
+
+		// Execute player playtime increment atomically.
+		// NOTE: The delta key is NOT deleted here as per new requirement.
 		pipe := pps.redisClient.Pipeline()
-		playerIncr := pipe.IncrByFloat(ctx, totalPlaytimeKey, deltaFloat)
-		pipe.Del(ctx, deltaKey) // Clear the delta key
+		playerIncrCmd := pipe.IncrByFloat(ctx, totalPlaytimeKey, deltaFloat)
+		// pipe.Del(ctx, deltaKey) // REMOVED: No longer consuming delta playtime
 
 		_, err := pipe.Exec(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to execute player playtime increment and delta delete for %s: %w", uuid, err)
+			return fmt.Errorf("failed to execute player playtime increment for player %s (no team found): %w", playerUUID, err)
 		}
-		if playerIncr.Err() != nil {
-			return fmt.Errorf("player playtime increment failed for %s (no team found): %w", uuid, playerIncr.Err())
+		if playerIncrCmd.Err() != nil {
+			return fmt.Errorf("player total playtime increment failed for player %s (no team found): %w", playerUUID, playerIncrCmd.Err())
 		}
-		log.Printf("Incremented playtime for player %s by %.2f (no team update). New total: %.2f", uuid, deltaFloat, playerIncr.Val())
+		log.Printf("Incremented total playtime for player %s by %.2f. New total: %.2f.", playerUUID, deltaFloat, playerIncrCmd.Val())
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("failed to get team ID for player %s: %w", uuid, err)
+		return fmt.Errorf("failed to retrieve team ID for player %s from Redis: %w", playerUUID, err)
 	}
 
+	// Construct the Redis key for the team's total playtime.
 	teamTotalPlaytimeKey := fmt.Sprintf(redisu.TeamTotalPlaytimePrefix, teamID)
 
-	// 4. Use a Redis Pipeline for atomic execution of both increments and delta key deletion.
+	// 4. Use a Redis Pipeline for atomic execution of all operations.
+	// This ensures that either all increments succeed, or none do.
+	// NOTE: The delta key is NOT deleted here as per new requirement.
 	pipe := pps.redisClient.Pipeline()
-	playerIncr := pipe.IncrByFloat(ctx, totalPlaytimeKey, deltaFloat)
-	teamIncr := pipe.IncrByFloat(ctx, teamTotalPlaytimeKey, deltaFloat)
-	pipe.Del(ctx, deltaKey) // Crucial: Delete the delta key after applying its value
+	playerIncrCmd := pipe.IncrByFloat(ctx, totalPlaytimeKey, deltaFloat)   // Increment player's total playtime
+	teamIncrCmd := pipe.IncrByFloat(ctx, teamTotalPlaytimeKey, deltaFloat) // Increment team's total playtime
+	// pipe.Del(ctx, deltaKey) // REMOVED: No longer consuming delta playtime
 
-	_, err = pipe.Exec(ctx)
+	_, err = pipe.Exec(ctx) // Execute the pipeline
 	if err != nil {
-		return fmt.Errorf("failed to execute playtime increments in pipeline for %s (team %s): %w", uuid, teamID, err)
+		return fmt.Errorf("failed to execute playtime increments pipeline for player %s (team %s): %w", playerUUID, teamID, err)
 	}
 
-	// Although pipe.Exec aggregates, checking individual command errors can provide more specific context.
-	if playerIncr.Err() != nil {
-		return fmt.Errorf("player playtime increment failed for %s: %w", uuid, playerIncr.Err())
+	// Check individual command errors within the pipeline for more granular reporting.
+	if playerIncrCmd.Err() != nil {
+		return fmt.Errorf("player total playtime increment failed for player %s: %w", playerUUID, playerIncrCmd.Err())
 	}
-	if teamIncr.Err() != nil {
-		return fmt.Errorf("team playtime increment failed for team %s: %w", teamID, teamIncr.Err())
+	if teamIncrCmd.Err() != nil {
+		return fmt.Errorf("team total playtime increment failed for team %s: %w", teamID, teamIncrCmd.Err())
 	}
 
-	log.Printf("Incremented playtime for player %s by %.2f. New total for player: %.2f. New total for team %s: %.2f",
-		uuid, deltaFloat, playerIncr.Val(), teamID, teamIncr.Val())
+	log.Printf("Successfully incremented total playtime for player %s by %.2f (new player total: %.2f) and team %s by %.2f (new team total: %.2f). Delta NOT consumed.",
+		playerUUID, deltaFloat, playerIncrCmd.Val(), teamID, deltaFloat, teamIncrCmd.Val())
 
 	return nil
 }
 
-// GetAllPlayerPlaytimes retrieves all current player playtime data from Redis.
+// GetAllPlayerPlaytimes retrieves all current player total playtime data from Redis.
+// This operation can be resource-intensive in large clusters.
 func (pps *PlayerPlaytimeStore) GetAllPlayerPlaytimes(ctx context.Context) (map[string]float64, error) {
 	playtimes := make(map[string]float64)
-	var mu sync.Mutex
+	var mu sync.Mutex // Protects map writes from concurrent goroutines across cluster nodes.
 
-	// Construct the scan pattern using the constant
-	scanPattern := strings.Replace(redisu.PlaytimeKeyPrefix, "%s", "*", 1) // <-- Using the constant here
+	// Construct the SCAN pattern using the constant, replacing the UUID placeholder with a wildcard.
+	scanPattern := fmt.Sprintf(redisu.PlaytimeKeyPrefix, "*")
 
+	// Iterate over all master nodes in the Redis Cluster to collect data.
 	err := pps.redisClient.ForEachMaster(ctx, func(ctx context.Context, client *redis.Client) error {
 		if client == nil {
-			log.Printf("Warning: ForEachMaster provided nil client, skipping node")
+			log.Printf("Warning: Redis Cluster ForEachMaster provided a nil client, skipping node.")
 			return nil
 		}
 
@@ -159,67 +175,80 @@ func (pps *PlayerPlaytimeStore) GetAllPlayerPlaytimes(ctx context.Context) (map[
 		for iter.Next(ctx) {
 			key := iter.Val()
 
-			// Extract UUID from key: "playtime:{uuid}:"
-			start := strings.Index(key, "{")
-			end := strings.Index(key, "}")
-			if start == -1 || end == -1 || end <= start {
-				log.Printf("Warning: Could not parse UUID from playtime key: %s", key)
+			// Extract the player UUID from the key (e.g., "playtime:{uuid}:" -> "uuid").
+			startIdx := strings.Index(key, "{")
+			endIdx := strings.Index(key, "}")
+			if startIdx == -1 || endIdx == -1 || endIdx <= startIdx {
+				log.Printf("Warning: Could not parse UUID from malformed playtime key: %s. Skipping.", key)
 				continue
 			}
-			uuid := key[start+1 : end]
+			playerUUID := key[startIdx+1 : endIdx] // Extract the UUID without braces
 
+			// Retrieve the playtime value.
 			val, err := client.Get(ctx, key).Float64()
 			if err != nil {
-				log.Printf("Warning: Failed to get playtime for %s from Redis: %v", uuid, err)
+				log.Printf("Warning: Failed to get playtime for player %s (key: %s) from Redis: %v. Skipping.", playerUUID, key, err)
 				continue
 			}
 
+			// Safely add the player's playtime to the shared map.
 			mu.Lock()
-			playtimes[uuid] = val
+			playtimes[playerUUID] = val
 			mu.Unlock()
 		}
-		return iter.Err()
+		return iter.Err() // Return any error from the iterator.
 	})
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to scan playtime redisu from Redis: %w", err)
+		return nil, fmt.Errorf("failed to scan all player playtime data from Redis cluster: %w", err)
 	}
 
 	return playtimes, nil
 }
 
-// SetPlayerDeltaPlaytime stores the delta playtime for a player's last session
+// SetPlayerDeltaPlaytime stores the latest calculated delta playtime for a player.
+// This delta represents the playtime accumulated in the current session since the last update.
 func (pps *PlayerPlaytimeStore) SetPlayerDeltaPlaytime(ctx context.Context, playerUUID string, deltaPlaytime float64) error {
 	key := fmt.Sprintf(redisu.DeltaPlaytimeKeyPrefix, playerUUID)
 
-	// Set with a reasonable TTL (e.g., 24 hours) for delta playtime
-	deltaTTL := 24 * time.Hour
+	// Set a reasonable TTL for delta playtime. This ensures that old deltas are cleaned up
+	// if they are not processed for some reason (e.g., service crash before processing).
+	deltaTTL := 24 * time.Hour // Sufficiently long for pending processing.
 	err := pps.redisClient.Set(ctx, key, deltaPlaytime, deltaTTL).Err()
 	if err != nil {
-		return fmt.Errorf("failed to set delta playtime for %s: %w", playerUUID, err)
+		return fmt.Errorf("failed to set delta playtime for player %s in Redis: %w", playerUUID, err)
 	}
 
-	log.Printf("Delta playtime set for %s: %.2f seconds", playerUUID, deltaPlaytime)
+	log.Printf("Delta playtime set for player %s: %.2f seconds (TTL: %s).", playerUUID, deltaPlaytime, deltaTTL)
 	return nil
 }
 
-// GetPlayerDeltaPlaytime retrieves a player's delta playtime from their last session
+// GetPlayerDeltaPlaytime retrieves a player's pending delta playtime from Redis.
+// Returns an error if no delta is found.
 func (pps *PlayerPlaytimeStore) GetPlayerDeltaPlaytime(ctx context.Context, playerUUID string) (float64, error) {
 	key := fmt.Sprintf(redisu.DeltaPlaytimeKeyPrefix, playerUUID)
 
 	val, err := pps.redisClient.Get(ctx, key).Float64()
 	if err == redis.Nil {
-		return 1.0, fmt.Errorf("no delta playtime found for player %s", playerUUID)
+		// Return a specific error when no delta playtime is found.
+		return 0.0, fmt.Errorf("no delta playtime found for player %s: %w", playerUUID, redisu.ErrRedisKeyNotFound)
 	}
 	if err != nil {
-		return 1.0, fmt.Errorf("failed to get delta playtime for %s: %w", playerUUID, err)
+		return 0.0, fmt.Errorf("failed to retrieve delta playtime for player %s from Redis: %w", playerUUID, err)
 	}
 
 	return val, nil
 }
 
-// SetPlayerTeam sets a player's assigned team in Redis.
-func (pps *PlayerPlaytimeStore) SetPlayerTeam(ctx context.Context, uuid string, teamID string) error {
-	key := fmt.Sprintf(redisu.PlayerTeamKeyPrefix, uuid)
-	return pps.redisClient.Set(ctx, key, teamID, 0).Err()
+// SetPlayerTeam assigns a player to a specific team in Redis.
+// The team assignment typically doesn't expire unless the player is removed from the team.
+func (pps *PlayerPlaytimeStore) SetPlayerTeam(ctx context.Context, playerUUID string, teamID string) error {
+	key := fmt.Sprintf(redisu.PlayerTeamKeyPrefix, playerUUID)
+	// Set with no expiration (0 duration) as team assignment is usually persistent.
+	err := pps.redisClient.Set(ctx, key, teamID, 0).Err()
+	if err != nil {
+		return fmt.Errorf("failed to set team ID for player %s in Redis: %w", playerUUID, err)
+	}
+	log.Printf("Player %s assigned to team %s.", playerUUID, teamID)
+	return nil
 }

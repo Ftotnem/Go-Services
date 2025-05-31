@@ -93,14 +93,14 @@ func (ps *PlayerService) CreateProfile(ctx context.Context, playerUUID string) (
 	// --- End Team Assignment Logic ---
 
 	newProfile := &models.Player{
-		UUID:               playerUUID,
-		Username:           "", // Placeholder, will be filled by Mojang API asynchronously
-		Team:               assignedTeamName,
-		TotalPlaytimeTicks: 0.0,
-		DeltaPlaytimeTicks: 1.0,
-		Banned:             false,
-		CreatedAt:          &now,
-		LastLoginAt:        &now,
+		UUID:          playerUUID,
+		Username:      "", // Placeholder, will be filled by Mojang API asynchronously
+		Team:          assignedTeamName,
+		TotalPlaytime: 0.0,
+		DeltaPlaytime: 1.0,
+		Banned:        false,
+		CreatedAt:     &now,
+		LastLoginAt:   &now,
 	}
 
 	err = ps.playerStore.CreatePlayer(ctx, newProfile) // Call the store method
