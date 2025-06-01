@@ -1,0 +1,29 @@
+# --- Build Stage ---
+FROM --platform=$BUILDPLATFORM golang:1.24.2 AS build
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY player ./player
+COPY shared ./shared
+
+ARG TARGETOS TARGETARCH
+
+# Build the Go executable for the 'player' service.
+# If main.go is directly in the 'player' directory, target the directory itself.
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -ldflags="-s -w" -o player-service ./player
+
+# --- Runtime Stage ---
+FROM --platform=$BUILDPLATFORM gcr.io/distroless/static-debian11 AS app
+
+WORKDIR /app
+
+COPY --from=build /app/player-service /player-service
+
+ # Example: using a different port than game service
+EXPOSE 8081
+
+CMD ["/player-service"]

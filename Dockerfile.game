@@ -1,0 +1,35 @@
+# --- Build Stage ---
+FROM --platform=$BUILDPLATFORM golang:1.24.2 AS build
+
+# Set the working directory inside the container for the build process
+WORKDIR /app
+
+# Copy only the go.mod and go.sum from the root of the monorepo.
+COPY go.mod go.sum ./
+
+# Download dependencies.
+RUN go mod download
+
+# Copy the specific service directory and the shared directory.
+COPY game ./game
+COPY shared ./shared
+
+# Automatically provided by the buildkit (Docker Buildx)
+ARG TARGETOS TARGETARCH
+
+# Build the Go executable for the 'game' service.
+# If main.go is directly in the 'game' directory, target the directory itself.
+# This assumes the main.go file has 'package main'.
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -ldflags="-s -w" -o game-service ./game
+
+# --- Runtime Stage ---
+FROM --platform=$BUILDPLATFORM gcr.io/distroless/static-debian11 AS app
+
+WORKDIR /app
+
+COPY --from=build /app/game-service /game-service
+
+EXPOSE 8082
+
+CMD ["/game-service"]

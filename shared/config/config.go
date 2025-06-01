@@ -54,15 +54,8 @@ func LoadCommonConfig() (CommonConfig, error) {
 	// Redis Addresses
 	redisAddrsStr := os.Getenv("REDIS_ADDRS")
 	if redisAddrsStr == "" {
-		//cfg.RedisAddrs = []string{"redis-cluster:6379"} // Default for K8s Service :6379
-		cfg.RedisAddrs = []string{
-			"127.0.0.1:7000",
-			"127.0.0.1:7001",
-			"127.0.0.1:7002",
-			"127.0.0.1:7003",
-			"127.0.0.1:7004",
-			"127.0.0.1:7005",
-		}
+		cfg.RedisAddrs = []string{"redis-cluster:6379"} // Default for K8s Service :6379
+		//cfg.RedisAddrs = []string{	"127.0.0.1:7000","127.0.0.1:7001","127.0.0.1:7002","127.0.0.1:7003","127.0.0.1:7004","127.0.0.1:7005",}
 	} else {
 		for _, addr := range strings.Split(redisAddrsStr, ",") {
 			cfg.RedisAddrs = append(cfg.RedisAddrs, strings.TrimSpace(addr))
@@ -87,7 +80,7 @@ func LoadCommonConfig() (CommonConfig, error) {
 	if cfg.ServiceIP == "" {
 		// Fallback for local development outside K8s or if not injected
 		// You might want to get local IP or use "localhost" depending on context
-		cfg.ServiceIP = "127.0.0.1"
+		cfg.ServiceIP = "0.0.0.0"
 		fmt.Printf("WARNING: POD_IP not set, defaulting ServiceIP to %s\n", cfg.ServiceIP)
 	}
 
@@ -156,7 +149,7 @@ func LoadGameServiceConfig() (*GameServiceConfig, error) {
 		cfg.ListenAddr = ":8082"
 	}
 	if cfg.PlayerServiceURL == "" {
-		cfg.PlayerServiceURL = "http://localhost:8081" //"http://player-service:8081" // Default for K8s internal DNS
+		cfg.PlayerServiceURL = "http://player-service:8081" // Default for K8s internal DNS
 	}
 
 	// Extract ServicePort from ListenAddr
@@ -232,10 +225,10 @@ func LoadPlayerServiceConfig() (*PlayerServiceConfig, error) {
 		cfg.ListenAddr = ":8081"
 	}
 	if cfg.MongoDBConnStr == "" {
-		cfg.MongoDBConnStr = "mongodb://localhost:27017" // Default for K8s Service mongodb://mongodb-service:27017
+		cfg.MongoDBConnStr = "mongodb://mongodb-service:27017" // Default for K8s Service mongodb://mongodb-service:27017
 	}
 	if cfg.MongoDBDatabase == "" {
-		cfg.MongoDBDatabase = "minecraft_players"
+		cfg.MongoDBDatabase = "minestom"
 	}
 	if cfg.MongoDBPlayersCollection == "" {
 		cfg.MongoDBPlayersCollection = "players"
