@@ -20,7 +20,7 @@ spec:
         image: wi1helm/gate:latest # Use the exact image and tag
         ports:
         - containerPort: 8080 # HTTP requests
-        - containerPort: 25566 # Minecraft protocol
+        - containerPort: 25565 # Minecraft protocol
         env:
         - name: REDIS_ADDRS
           value: "redis-cluster-0.redis-cluster.minecraft-cluster.svc.cluster.local:6379,redis-cluster-1.redis-cluster.minecraft-cluster.svc.cluster.local:6379,redis-cluster-2.redis-cluster.minecraft-cluster.svc.cluster.local:6379,redis-cluster-3.redis-cluster.minecraft-cluster.svc.cluster.local:6379,redis-cluster-4.redis-cluster.minecraft-cluster.svc.cluster.local:6379,redis-cluster-5.redis-cluster.minecraft-cluster.svc.cluster.local:6379"
@@ -53,6 +53,6 @@ spec:
       targetPort: 8080
     - name: minecraft
       protocol: TCP
-      port: 25566
-      targetPort: 25566
+      port: 25565
+      targetPort: 25565
   type: LoadBalancer # This will request an IP from Metallb
