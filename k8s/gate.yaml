@@ -34,6 +34,10 @@ spec:
           value: "15s"
         - name: SERVICE_REGISTRY_CLEANUP_INTERVAL
           value: "30s"
+        - name: GAME_SERVICE_URI
+          value: "http://game-service:8082"
+        - name: PLAYERS_SERVICE_URL
+          value: "http://player-service:8081" # Internal K8s DNS
         # Add any other gate-specific environment variables if they exist
 ---
 apiVersion: v1
