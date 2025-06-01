@@ -186,21 +186,31 @@ func (ops *OnlinePlayersStore) GetPlayerSessionDuration(ctx context.Context, pla
 
 // RefreshPlayerOnlineStatus extends the TTL (Time To Live) for a player's online status key.
 // This acts as a "heartbeat" to keep a player marked as online.
+// It ensures the key exists or is refreshed, even if it expired.
 func (ops *OnlinePlayersStore) RefreshPlayerOnlineStatus(ctx context.Context, playerUUID string) error {
 	key := fmt.Sprintf(redisu.OnlineKeyPrefix, playerUUID)
 
-	// Use Redis's EXPIRE command to set the new TTL.
-	// This command only works if the key already exists.
-	success, err := ops.client.Expire(ctx, key, ops.onlineTTL).Result()
+	// The value doesn't strictly matter for online status,
+	// it just needs to exist. You could use "online", "1", or even an empty string.
+	// We'll use a placeholder string.
+	// Store the session start timestamp (Unix seconds) as the value.
+	startTimestamp := time.Now().Unix()
+
+	// Use Redis's SET command with the EX (expiration) option.
+	// This will set the key 'key' to 'value' and set its TTL to 'ops.onlineTTL'.
+	// If the key already exists, it will be overwritten and its TTL reset.
+	// This is idempotent and handles both initial setting and refreshing.
+	status, err := ops.client.Set(ctx, key, startTimestamp, ops.onlineTTL).Result()
 	if err != nil {
-		return fmt.Errorf("failed to refresh online status TTL for player %s in Redis: %w", playerUUID, err)
-	}
-	if !success {
-		// If Expire returns false, it means the key did not exist (e.g., already expired or never set).
-		return fmt.Errorf("could not refresh online status for player %s, key might not exist or already expired", playerUUID)
+		return fmt.Errorf("failed to set/refresh online status for player %s in Redis: %w", playerUUID, err)
 	}
 
-	log.Printf("Online status TTL for player %s refreshed to %s.", playerUUID, ops.onlineTTL)
+	// "OK" is returned if the SET operation was successful.
+	if status != "OK" {
+		return fmt.Errorf("unexpected status from Redis SET for player %s: %s", playerUUID, status)
+	}
+
+	log.Printf("Online status for player %s refreshed to %d (TTL: %s).", playerUUID, startTimestamp, ops.onlineTTL)
 	return nil
 }
 

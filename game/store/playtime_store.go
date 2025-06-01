@@ -66,8 +66,7 @@ func (pps *PlayerPlaytimeStore) GetPlayerPlaytime(ctx context.Context, playerUUI
 
 // IncrementPlayerPlaytime atomically increments a player's total playtime
 // and their associated team's total playtime in Redis.
-// It uses the `deltaPlaytime` stored under `DeltaPlaytimeKeyPrefix` but DOES NOT clear it.
-// The delta value will persist until explicitly updated or expired.
+// It uses the `deltaPlaytime` stored under `DeltaPlaytimeKeyPrefix` and CONSUMES it (clears it after use).
 func (pps *PlayerPlaytimeStore) IncrementPlayerPlaytime(ctx context.Context, playerUUID string) error {
 	// Use the correct package alias for constants when constructing keys.
 	deltaKey := fmt.Sprintf(redisu.DeltaPlaytimeKeyPrefix, playerUUID)
@@ -94,8 +93,14 @@ func (pps *PlayerPlaytimeStore) IncrementPlayerPlaytime(ctx context.Context, pla
 
 	if deltaFloat <= 0 {
 		// If the delta is zero or negative, there's nothing to add.
-		// We still log this, but don't perform increments.
-		log.Printf("INFO: Delta playtime for player %s is %.2f (non-positive). No increment performed.", playerUUID, deltaFloat)
+		// We still log this, but don't perform increments. We should still consume the delta.
+		log.Printf("INFO: Delta playtime for player %s is %.2f (non-positive). Consuming delta without increment.", playerUUID, deltaFloat)
+
+		// Clear the delta even if it's non-positive to prevent repeated processing
+		err = pps.redisClient.Del(ctx, deltaKey).Err()
+		if err != nil {
+			log.Printf("WARNING: Failed to clear non-positive delta for player %s: %v", playerUUID, err)
+		}
 		return nil
 	}
 
@@ -103,13 +108,12 @@ func (pps *PlayerPlaytimeStore) IncrementPlayerPlaytime(ctx context.Context, pla
 	teamID, err := pps.redisClient.Get(ctx, playerTeamKey).Result()
 	if err == redis.Nil {
 		// If no team ID is found, log a warning but proceed with player playtime increment.
-		//log.Printf("WARNING: Team ID key %s not found for player %s. Player playtime will be incremented, but team playtime will not be updated.", playerTeamKey, playerUUID)
+		log.Printf("WARNING: Team ID key %s not found for player %s. Player playtime will be incremented, but team playtime will not be updated.", playerTeamKey, playerUUID)
 
-		// Execute player playtime increment atomically.
-		// NOTE: The delta key is NOT deleted here as per new requirement.
+		// Execute player playtime increment atomically and consume the delta.
 		pipe := pps.redisClient.Pipeline()
 		playerIncrCmd := pipe.IncrByFloat(ctx, totalPlaytimeKey, deltaFloat)
-		// pipe.Del(ctx, deltaKey) // REMOVED: No longer consuming delta playtime
+		pipe.Del(ctx, deltaKey) // CONSUME the delta playtime
 
 		_, err := pipe.Exec(ctx)
 		if err != nil {
@@ -118,7 +122,7 @@ func (pps *PlayerPlaytimeStore) IncrementPlayerPlaytime(ctx context.Context, pla
 		if playerIncrCmd.Err() != nil {
 			return fmt.Errorf("player total playtime increment failed for player %s (no team found): %w", playerUUID, playerIncrCmd.Err())
 		}
-		log.Printf("Incremented total playtime for player %s by %.2f. New total: %.2f.", playerUUID, deltaFloat, playerIncrCmd.Val())
+		log.Printf("Incremented total playtime for player %s by %.2f. New total: %.2f. Delta consumed.", playerUUID, deltaFloat, playerIncrCmd.Val())
 		return nil
 	}
 	if err != nil {
@@ -130,11 +134,11 @@ func (pps *PlayerPlaytimeStore) IncrementPlayerPlaytime(ctx context.Context, pla
 
 	// 4. Use a Redis Pipeline for atomic execution of all operations.
 	// This ensures that either all increments succeed, or none do.
-	// NOTE: The delta key is NOT deleted here as per new requirement.
+	// The delta key IS deleted here to consume it after use.
 	pipe := pps.redisClient.Pipeline()
 	playerIncrCmd := pipe.IncrByFloat(ctx, totalPlaytimeKey, deltaFloat)   // Increment player's total playtime
 	teamIncrCmd := pipe.IncrByFloat(ctx, teamTotalPlaytimeKey, deltaFloat) // Increment team's total playtime
-	// pipe.Del(ctx, deltaKey) // REMOVED: No longer consuming delta playtime
+	pipe.Del(ctx, deltaKey)                                                // CONSUME the delta playtime
 
 	_, err = pipe.Exec(ctx) // Execute the pipeline
 	if err != nil {
@@ -149,7 +153,8 @@ func (pps *PlayerPlaytimeStore) IncrementPlayerPlaytime(ctx context.Context, pla
 		return fmt.Errorf("team total playtime increment failed for team %s: %w", teamID, teamIncrCmd.Err())
 	}
 
-	//log.Printf("Successfully incremented total playtime for player %s by %.2f (new player total: %.2f) and team %s by %.2f (new team total: %.2f). Delta NOT consumed.",	playerUUID, deltaFloat, playerIncrCmd.Val(), teamID, deltaFloat, teamIncrCmd.Val())
+	log.Printf("Successfully incremented total playtime for player %s by %.2f (new player total: %.2f) and team %s by %.2f (new team total: %.2f). Delta consumed.",
+		playerUUID, deltaFloat, playerIncrCmd.Val(), teamID, deltaFloat, teamIncrCmd.Val())
 
 	return nil
 }
