@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: player-service
+  namespace: minecraft-cluster
+  labels:
+    app: player-service
+spec:
+  replicas: 2 # You can adjust the number of player service instances
+  selector:
+    matchLabels:
+      app: player-service
+  template:
+    metadata:
+      labels:
+        app: player-service
+    spec:
+      containers:
+      - name: player
+        image: wi1helm/player:latest # Use the exact image and tag
+        ports:
+        - containerPort: 8081
+        env:
+        - name: REDIS_ADDRS
+          value: "redis-cluster-0.redis-cluster.minecraft-cluster.svc.cluster.local:6379,redis-cluster-1.redis-cluster.minecraft-cluster.svc.cluster.local:6379,redis-cluster-2.redis-cluster.minecraft-cluster.svc.cluster.local:6379,redis-cluster-3.redis-cluster.minecraft-cluster.svc.cluster.local:6379,redis-cluster-4.redis-cluster.minecraft-cluster.svc.cluster.local:6379,redis-cluster-5.redis-cluster.minecraft-cluster.svc.cluster.local:6379"
+        - name: MONGODB_CONN_STR
+          value: "mongodb://admin:password@mongodb-service:27017" # Update with your MongoDB credentials
+        - name: MONGODB_DATABASE
+          value: "minestom"
+        - name: MONGODB_PLAYERS_COLLECTION
+          value: "players"
+        - name: MONGODB_TEAM_COLLECTION
+          value: "teams"
+        - name: PLAYER_SERVICE_LISTEN_ADDR
+          value: ":8081"
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: SERVICE_HEARTBEAT_INTERVAL
+          value: "5s"
+        - name: SERVICE_HEARTBEAT_TTL
+          value: "15s"
+        - name: SERVICE_REGISTRY_CLEANUP_INTERVAL
+          value: "30s"
+        - name: USERNAME_FILLER_INTERVAL
+          value: "30s"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: player-service
+  namespace: minecraft-cluster
+spec:
+  selector:
+    app: player-service
+  ports:
+    - protocol: TCP
+      port: 8081
+      targetPort: 8081

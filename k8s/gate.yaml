@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gate-proxy
+  namespace: minecraft-cluster
+  labels:
+    app: gate-proxy
+spec:
+  replicas: 2 # You can adjust the number of gate proxies
+  selector:
+    matchLabels:
+      app: gate-proxy
+  template:
+    metadata:
+      labels:
+        app: gate-proxy
+    spec:
+      containers:
+      - name: gate
+        image: wi1helm/gate:latest # Use the exact image and tag
+        ports:
+        - containerPort: 8080 # HTTP requests
+        - containerPort: 25566 # Minecraft protocol
+        env:
+        - name: REDIS_ADDRS
+          value: "redis-cluster-0.redis-cluster.minecraft-cluster.svc.cluster.local:6379,redis-cluster-1.redis-cluster.minecraft-cluster.svc.cluster.local:6379,redis-cluster-2.redis-cluster.minecraft-cluster.svc.cluster.local:6379,redis-cluster-3.redis-cluster.minecraft-cluster.svc.cluster.local:6379,redis-cluster-4.redis-cluster.minecraft-cluster.svc.cluster.local:6379,redis-cluster-5.redis-cluster.minecraft-cluster.svc.cluster.local:6379"
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: SERVICE_HEARTBEAT_INTERVAL
+          value: "5s"
+        - name: SERVICE_HEARTBEAT_TTL
+          value: "15s"
+        - name: SERVICE_REGISTRY_CLEANUP_INTERVAL
+          value: "30s"
+        # Add any other gate-specific environment variables if they exist
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gate-proxy-service
+  namespace: minecraft-cluster
+  annotations:
+    metallb.universe.tf/allow-shared-ip: gate-proxy-external-ip # if you want to share an IP with other services
+spec:
+  selector:
+    app: gate-proxy
+  ports:
+    - name: http
+      protocol: TCP
+      port: 8080
+      targetPort: 8080
+    - name: minecraft
+      protocol: TCP
+      port: 25566
+      targetPort: 25566
+  type: LoadBalancer # This will request an IP from Metallb

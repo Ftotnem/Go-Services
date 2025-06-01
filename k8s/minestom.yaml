@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minestom-server
+  namespace: minecraft-cluster
+  labels:
+    app: minestom-server
+spec:
+  replicas: 3 # Start with 3 minestom servers, adjust as needed
+  selector:
+    matchLabels:
+      app: minestom-server
+  template:
+    metadata:
+      labels:
+        app: minestom-server
+    spec:
+      containers:
+      - name: minestom
+        image: wi1helm/minestom:latest # Use the exact image and tag
+        ports:
+        - containerPort: 25565 # Default Minecraft server port
+        env:
+        - name: MINECRAFT_SERVER_PORT
+          value: "25565"
+        - name: MINECRAFT_SERVER_LABEL
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name # Use the pod name as a unique label
+        - name: MINESTOM_VERSION
+          value: "latest" # Or specific version from your build
+        - name: REDIS_CLUSTER_ADDR
+          value: "redis-cluster-0.redis-cluster.minecraft-cluster.svc.cluster.local:6379,redis-cluster-1.redis-cluster.minecraft-cluster.svc.cluster.local:6379,redis-cluster-2.redis-cluster.minecraft-cluster.svc.cluster.local:6379,redis-cluster-3.redis-cluster.minecraft-cluster.svc.cluster.local:6379,redis-cluster-4.redis-cluster.minecraft-cluster.svc.cluster.local:6379,redis-cluster-5.redis-cluster.minecraft-cluster.svc.cluster.local:6379"
+        - name: POD_IP # Minestom needs its own IP for registration
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        # Java applications often need memory settings
+        resources:
+          requests:
+            memory: "1Gi" # Adjust as needed
+            cpu: "500m"
+          limits:
+            memory: "2Gi" # Adjust as needed
+            cpu: "1"

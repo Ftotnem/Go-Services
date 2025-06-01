@@ -1,0 +1,88 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-cluster
+  namespace: minecraft-cluster
+  labels:
+    app: redis-cluster
+spec:
+  ports:
+  - port: 6379
+    name: redis
+  clusterIP: None # This makes it a headless service
+  selector:
+    app: redis-cluster
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-cluster
+  namespace: minecraft-cluster
+spec:
+  serviceName: "redis-cluster"
+  replicas: 6
+  selector:
+    matchLabels:
+      app: redis-cluster
+  template:
+    metadata:
+      labels:
+        app: redis-cluster
+    spec:
+      containers:
+      - name: redis
+        image: redis:7.0-alpine
+        command: ["redis-server"]
+        args: ["/etc/redis/redis.conf", "--appendonly", "yes"]
+        ports:
+        - containerPort: 6379
+          name: redis
+        volumeMounts:
+        - name: redis-config
+          mountPath: /etc/redis/redis.conf
+          subPath: redis.conf
+        - name: redis-data
+          mountPath: /data
+        env:
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: HOSTNAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        # Add entrypoint to initialize cluster if it's the first node
+        # This part often requires a custom entrypoint script or an operator
+        # For simplicity, we are assuming manual cluster creation or an operator for now.
+        # This setup will create 6 independent Redis instances.
+        # To truly form a cluster, you would need to run `redis-cli --cluster create`
+        # from one of the pods after they are all up.
+      volumes:
+      - name: redis-config
+        configMap:
+          name: redis-cluster-config
+  volumeClaimTemplates:
+  - metadata:
+      name: redis-data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 1Gi # Adjust storage as needed
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-cluster-config
+  namespace: minecraft-cluster
+data:
+  redis.conf: |
+    port 6379
+    cluster-enabled yes
+    cluster-config-file nodes.conf
+    cluster-node-timeout 5000
+    appendonly yes
+    protected-mode no # DANGER: Only for testing. Use proper network policies.
+    bind 0.0.0.0
+    loglevel notice
