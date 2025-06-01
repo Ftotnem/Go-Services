@@ -9,23 +9,45 @@ echo "Deploying Kubernetes resources for Minecraft Cluster..."
 echo "Creating namespace 'minecraft-cluster'..."
 kubectl apply -f namespace.yaml
 
+# IMPORTANT SECURITY NOTE: Passwords are hardcoded as per user request.
+# This is INSECURE for production environments.
+
 # Deploy Redis Cluster
-echo "Deploying Redis Cluster (StatefulSet and Service)..."
+echo "Deploying Redis Cluster (StatefulSet, Service, and ConfigMap)..."
 kubectl apply -f redis-cluster.yaml
 
 echo "Waiting for Redis cluster pods to be ready..."
+# Wait for pods to be ready according to their readiness probes
 kubectl wait --namespace minecraft-cluster --for=condition=ready pod -l app=redis-cluster --timeout=300s
 
-echo "Redis cluster pods are ready. You might need to manually form the cluster using redis-cli if not using an operator."
-echo "Example (run from one of the redis pods):"
-echo "kubectl exec -it redis-cluster-0 -n minecraft-cluster -- redis-cli --cluster create \
-redis-cluster-0.redis-cluster.minecraft-cluster.svc.cluster.local:6379 \
-redis-cluster-1.redis-cluster.minecraft-cluster.svc.cluster.local:6379 \
-redis-cluster-2.redis-cluster.minecraft-cluster.svc.cluster.local:6379 \
-redis-cluster-3.redis-cluster.minecraft-cluster.svc.cluster.local:6379 \
-redis-cluster-4.redis-cluster.minecraft-cluster.svc.cluster.local:6379 \
-redis-cluster-5.redis-cluster.minecraft-cluster.svc.cluster.local:6379 \
---cluster-replicas 1" # Adjust --cluster-replicas as needed
+# Give Redis servers a moment to fully initialize inside pods after they are "ready"
+echo "Giving Redis servers a moment to initialize for clustering..."
+sleep 15 # Increased sleep for safer cluster creation
+
+echo "Attempting to form Redis cluster if not already formed..."
+# Get a random pod to check cluster info - ensure it's one of the actual cluster pods
+REDIS_POD_NAME=$(kubectl get pod -l app=redis-cluster -n minecraft-cluster -o jsonpath='{.items[0].metadata.name}')
+
+# Check if cluster is already formed by querying any redis pod
+if kubectl exec -it "$REDIS_POD_NAME" -n minecraft-cluster -- redis-cli cluster info | grep -q "cluster_state:ok"; then
+  echo "Redis cluster already formed. Skipping cluster creation."
+else
+  echo "Forming new Redis cluster..."
+  # Construct the list of nodes for cluster creation. Use headless service FQDNs.
+  REDIS_NODES=""
+  for i in $(seq 0 5); do
+    # Using the headless service FQDN as redis-cli can resolve it to the pod IP
+    REDIS_NODES+="redis-cluster-$i.redis-cluster.minecraft-cluster.svc.cluster.local:6379 "
+  done
+
+  # Execute cluster creation command from the first pod
+  # --cluster-yes accepts the configuration without prompt
+  kubectl exec -it redis-cluster-0 -n minecraft-cluster -- redis-cli --cluster create $REDIS_NODES --cluster-replicas 1 --cluster-yes
+
+  echo "Verifying Redis cluster status after creation (wait 5s)..."
+  sleep 5
+  kubectl exec -it redis-cluster-0 -n minecraft-cluster -- redis-cli cluster info
+fi
 
 # Deploy MongoDB
 echo "Deploying MongoDB (PersistentVolumeClaim, Deployment, Service)..."
@@ -64,5 +86,5 @@ kubectl wait --namespace minecraft-cluster --for=condition=ready pod -l app=mine
 
 echo "All services deployed successfully!"
 echo ""
-echo "To get the external IP for the Gate Proxy (if Metallb is configured and has allocated an IP):"
+echo "To get the external IP for the Gate Proxy (if K3s/MetalLB has allocated an IP):"
 echo "kubectl get svc gate-proxy-service -n minecraft-cluster"
