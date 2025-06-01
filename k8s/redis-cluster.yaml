@@ -83,6 +83,6 @@ data:
     cluster-config-file nodes.conf
     cluster-node-timeout 5000
     appendonly yes
-    protected-mode no # DANGER: Only for testing. Use proper network policies.
+    protected-mode no 
     bind 0.0.0.0
     loglevel notice
