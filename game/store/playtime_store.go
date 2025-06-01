@@ -110,10 +110,9 @@ func (pps *PlayerPlaytimeStore) IncrementPlayerPlaytime(ctx context.Context, pla
 		// If no team ID is found, log a warning but proceed with player playtime increment.
 		log.Printf("WARNING: Team ID key %s not found for player %s. Player playtime will be incremented, but team playtime will not be updated.", playerTeamKey, playerUUID)
 
-		// Execute player playtime increment atomically and consume the delta.
+		// Execute player playtime increment atomicall
 		pipe := pps.redisClient.Pipeline()
 		playerIncrCmd := pipe.IncrByFloat(ctx, totalPlaytimeKey, deltaFloat)
-		pipe.Del(ctx, deltaKey) // CONSUME the delta playtime
 
 		_, err := pipe.Exec(ctx)
 		if err != nil {
@@ -138,9 +137,7 @@ func (pps *PlayerPlaytimeStore) IncrementPlayerPlaytime(ctx context.Context, pla
 	pipe := pps.redisClient.Pipeline()
 	playerIncrCmd := pipe.IncrByFloat(ctx, totalPlaytimeKey, deltaFloat)   // Increment player's total playtime
 	teamIncrCmd := pipe.IncrByFloat(ctx, teamTotalPlaytimeKey, deltaFloat) // Increment team's total playtime
-	pipe.Del(ctx, deltaKey)                                                // CONSUME the delta playtime
-
-	_, err = pipe.Exec(ctx) // Execute the pipeline
+	_, err = pipe.Exec(ctx)                                                // Execute the pipeline
 	if err != nil {
 		return fmt.Errorf("failed to execute playtime increments pipeline for player %s (team %s): %w", playerUUID, teamID, err)
 	}
