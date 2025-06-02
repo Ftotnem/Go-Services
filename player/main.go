@@ -40,7 +40,7 @@ func main() {
 		log.Println("Disconnected from MongoDB.")
 	}()
 	// --- 3. Connect to Redis ---
-	redisClient, err := redisu.NewRedisClusterClient(cfg.RedisAddrs)
+	redisClient, err := redisu.NewRedisClusterClient(cfg.RedisAddrs, cfg.RedisPassword)
 	if err != nil {
 		log.Fatalf("Failed to connect to Redis Cluster: %v", err)
 	}

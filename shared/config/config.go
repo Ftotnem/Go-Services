@@ -13,6 +13,7 @@ import (
 // CommonConfig holds configuration fields that are shared across multiple services.
 type CommonConfig struct {
 	RedisAddrs              []string      // Redis server addresses (e.g., "redis-cluster:6379")
+	RedisPassword           string        // NEW: Redis password for authentication
 	HeartbeatInterval       time.Duration // How often to send a heartbeat to registry (e.g., 5s)
 	HeartbeatTTL            time.Duration // How long an instance is considered alive without a heartbeat (e.g., 15s)
 	RegistryCleanupInterval time.Duration // How often the registry actively cleans stale entries (e.g., 30s)
@@ -54,13 +55,15 @@ func LoadCommonConfig() (CommonConfig, error) {
 	// Redis Addresses
 	redisAddrsStr := os.Getenv("REDIS_ADDRS")
 	if redisAddrsStr == "" {
-		cfg.RedisAddrs = []string{"redis-cluster:6379"} // Default for K8s Service :6379
-		//cfg.RedisAddrs = []string{	"127.0.0.1:7000","127.0.0.1:7001","127.0.0.1:7002","127.0.0.1:7003","127.0.0.1:7004","127.0.0.1:7005",}
+		cfg.RedisAddrs = []string{"redis-cluster-headless.minecraft-cluster.svc.cluster.local:6379"} // Default for K8s Service
 	} else {
 		for _, addr := range strings.Split(redisAddrsStr, ",") {
 			cfg.RedisAddrs = append(cfg.RedisAddrs, strings.TrimSpace(addr))
 		}
 	}
+
+	// NEW: Redis Password
+	cfg.RedisPassword = os.Getenv("REDIS_PASSWORD")
 
 	cfg.HeartbeatInterval, err = getDuration("SERVICE_HEARTBEAT_INTERVAL", 5*time.Second)
 	if err != nil {
@@ -79,7 +82,6 @@ func LoadCommonConfig() (CommonConfig, error) {
 	cfg.ServiceIP = os.Getenv("POD_IP") // Injected by Kubernetes
 	if cfg.ServiceIP == "" {
 		// Fallback for local development outside K8s or if not injected
-		// You might want to get local IP or use "localhost" depending on context
 		cfg.ServiceIP = "0.0.0.0"
 		fmt.Printf("WARNING: POD_IP not set, defaulting ServiceIP to %s\n", cfg.ServiceIP)
 	}

@@ -13,13 +13,15 @@ import (
 // NewRedisClusterClient creates and returns a new configured Redis Cluster client.
 // This function can be used by any service or shared component that needs to
 // connect to the Redis Cluster.
-func NewRedisClusterClient(addrs []string) (*redis.ClusterClient, error) {
+// It now accepts a password for authentication.
+func NewRedisClusterClient(addrs []string, password string) (*redis.ClusterClient, error) {
 	if len(addrs) == 0 {
 		return nil, fmt.Errorf("no Redis addresses provided")
 	}
 
 	rdb := redis.NewClusterClient(&redis.ClusterOptions{
 		Addrs:        addrs,
+		Password:     password, // Pass the provided password here
 		DialTimeout:  5 * time.Second,
 		ReadTimeout:  3 * time.Second,
 		WriteTimeout: 3 * time.Second,
