@@ -63,7 +63,7 @@ kubectl wait --namespace minecraft-cluster --for=condition=ready pod -l app=game
 echo "Deploying Gate Proxy (Deployment and LoadBalancer Service)..."
 kubectl apply -f gate.yaml
 
-echo "Waiting for Gate Proxy pods to be ready..."
+echo "Waiting for Gate Proxy pods to be ready..."bt
 kubectl wait --namespace minecraft-cluster --for=condition=ready pod -l app=gate-proxy --timeout=300s
 
 # Deploy Minestom Servers
@@ -81,4 +81,4 @@ echo ""
 echo "To connect to the Redis cluster client (no password needed):"
 echo "kubectl run --namespace minecraft-cluster minecraft-redis-cluster-client --rm --tty -i --restart='Never' --image docker.io/bitnami/redis-cluster:7.2.4-debian-12-r11 -- bash"
 echo "  # Once inside the container, run:"
-echo "  # redis-cli -c -h minecraft-redis-cluster"
+echo "  # redis-cli -c -h redis-cluster"

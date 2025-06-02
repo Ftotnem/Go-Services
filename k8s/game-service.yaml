@@ -22,7 +22,7 @@ spec:
         - containerPort: 8082
         env:
         - name: REDIS_ADDRS
-          value: "redis-cluster-0.redis-cluster.minecraft-cluster.svc.cluster.local:6379,redis-cluster-1.redis-cluster.minecraft-cluster.svc.cluster.local:6379,redis-cluster-2.redis-cluster.minecraft-cluster.svc.cluster.local:6379,redis-cluster-3.redis-cluster.minecraft-cluster.svc.cluster.local:6379,redis-cluster-4.redis-cluster.minecraft-cluster.svc.cluster.local:6379,redis-cluster-5.redis-cluster.minecraft-cluster.svc.cluster.local:6379"
+          value: "redis-cluster-0.redis-cluster-headless.minecraft-cluster.svc.cluster.local:6379,redis-cluster-1.redis-cluster-headless.minecraft-cluster.svc.cluster.local:6379,redis-cluster-2.redis-cluster-headless.minecraft-cluster.svc.cluster.local:6379,redis-cluster-3.redis-cluster-headless.minecraft-cluster.svc.cluster.local:6379,redis-cluster-4.redis-cluster-headless.minecraft-cluster.svc.cluster.local:6379,redis-cluster-5.redis-cluster-headless.minecraft-cluster.svc.cluster.local:6379"        
         - name: GAME_SERVICE_LISTEN_ADDR
           value: ":8082"
         - name: PLAYERS_SERVICE_URL
