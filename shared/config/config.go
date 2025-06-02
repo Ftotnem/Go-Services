@@ -64,7 +64,7 @@ func LoadCommonConfig() (CommonConfig, error) {
 
 	// NEW: Redis Password
 	cfg.RedisPassword = os.Getenv("REDIS_PASSWORD")
-
+	fmt.Println(cfg.RedisPassword)
 	cfg.HeartbeatInterval, err = getDuration("SERVICE_HEARTBEAT_INTERVAL", 5*time.Second)
 	if err != nil {
 		return cfg, err
