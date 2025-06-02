@@ -16,17 +16,17 @@ kubectl apply -f namespace.yaml
 echo "Deploying Redis Cluster using Bitnami Helm chart (without password)..."
 
 # Add Bitnami Helm repository (if not already added)
-# Removed the --allow-repo-urls flag
 helm repo add bitnami https://charts.bitnami.com/bitnami || echo "Bitnami repo already added."
 
 # Update Helm repositories to ensure latest chart versions are available
 helm repo update
 
-# Install the Redis Cluster chart, disabling password authentication
+# Install or upgrade the Redis Cluster chart, disabling password authentication
+# --install: If the release does not exist, install it.
 # --wait: Helm will wait for all resources in the release to be ready (including Redis pods)
 # --timeout: Maximum time to wait for the deployment to succeed
 # --set auth.enabled=false: This is the key change to disable password authentication.
-helm install redis-cluster bitnami/redis-cluster \
+helm upgrade --install redis-cluster bitnami/redis-cluster \
   --namespace minecraft-cluster \
   --set auth.enabled=false \
   --wait \
@@ -63,7 +63,7 @@ kubectl wait --namespace minecraft-cluster --for=condition=ready pod -l app=game
 echo "Deploying Gate Proxy (Deployment and LoadBalancer Service)..."
 kubectl apply -f gate.yaml
 
-echo "Waiting for Gate Proxy pods to be ready..."bt
+echo "Waiting for Gate Proxy pods to be ready..."
 kubectl wait --namespace minecraft-cluster --for=condition=ready pod -l app=gate-proxy --timeout=300s
 
 # Deploy Minestom Servers
