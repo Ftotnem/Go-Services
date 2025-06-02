@@ -18,35 +18,39 @@ helm repo add bitnami https://charts.bitnami.com/bitnami || echo "Bitnami repo a
 # Update Helm repositories to ensure latest chart versions are available
 helm repo update
 
-# --- NEW: Forceful cleanup of previous Redis Helm release before re-install ---
-echo "Attempting to uninstall existing Redis Cluster Helm release to ensure a clean slate..."
-helm uninstall redis-cluster --namespace minecraft-cluster --no-hooks --wait || true # --no-hooks helps if hooks are stuck, --wait ensures it completes
-echo "Existing Redis Cluster Helm release uninstalled (if it existed)."
+# Check if the Redis secret already exists to retrieve the password for upgrades
+REDIS_SECRET_NAME="redis-cluster"
+REDIS_PASSWORD_KEY="redis-password"
+REDIS_CURRENT_PASSWORD=""
 
-# Generate a random password and store it in a Kubernetes Secret
-# This ensures the password is managed by Kubernetes and is consistently used.
-REDIS_SECRET_NAME="redis-cluster-password"
-# --- NEW: Always recreate the secret to ensure it's fresh ---
-echo "Creating/recreating Kubernetes secret '$REDIS_SECRET_NAME' for Redis password..."
-# Delete the secret if it exists, then recreate it
-kubectl delete secret "$REDIS_SECRET_NAME" -n minecraft-cluster --ignore-not-found=true
-REDIS_GENERATED_PASSWORD=$(openssl rand -base64 12)
-kubectl create secret generic "$REDIS_SECRET_NAME" \
-    --from-literal=password="$REDIS_GENERATED_PASSWORD" \
-    --namespace minecraft-cluster
+if kubectl get secret "$REDIS_SECRET_NAME" -n minecraft-cluster &> /dev/null; then
+    echo "Existing Redis secret '$REDIS_SECRET_NAME' found. Retrieving current password..."
+    REDIS_CURRENT_PASSWORD=$(kubectl get secret "$REDIS_SECRET_NAME" -n minecraft-cluster -o jsonpath="{.data.$REDIS_PASSWORD_KEY}" | base64 -d)
+    echo "Using existing Redis password for upgrade."
+else
+    echo "No existing Redis secret '$REDIS_SECRET_NAME' found. Helm will generate a new password."
+fi
 
-# Install the Redis Cluster chart with the newly generated password
-# Removed auth.existingSecret and auth.passwordKey as the chart creates its own secret 'redis-cluster'
-# and directly setting the password is more reliable for 'requirepass'.
-helm install redis-cluster bitnami/redis-cluster \
+# Construct the --set argument for the password if it exists
+REDIS_PASSWORD_SET_ARG=""
+if [ -n "$REDIS_CURRENT_PASSWORD" ]; then
+    REDIS_PASSWORD_SET_ARG="--set auth.password=\"$REDIS_CURRENT_PASSWORD\""
+fi
+
+# Use helm upgrade --install to create or update the Redis Cluster
+# If REDIS_CURRENT_PASSWORD is set, it will be passed to ensure password persistence.
+# Otherwise, the chart will generate a new one on initial install.
+echo "Installing/Upgrading Redis Cluster Helm release..."
+helm upgrade --install redis-cluster bitnami/redis-cluster \
   --namespace minecraft-cluster \
   --set auth.enabled=true \
-  --set auth.password="$REDIS_GENERATED_PASSWORD" \ # --- NEW: Directly set the password ---
+  $REDIS_PASSWORD_SET_ARG \
   --wait \
   --timeout 600s
 
 echo "Redis Cluster deployed successfully by Helm (password enabled)."
 echo "Helm has handled waiting for pods and forming the cluster automatically."
+echo "The Redis password is stored in the 'redis-cluster' secret under the key 'redis-password'."
 
 # --- End Redis Cluster Deployment ---
 
@@ -60,10 +64,7 @@ kubectl wait --namespace minecraft-cluster --for=condition=ready pod -l app=mong
 
 # Deploy Player Service
 echo "Deploying Player Service (Deployment and Service)..."
-# IMPORTANT: You will need to apply player-service.yaml AFTER this script,
-# or add the kubectl apply -f player-service.yaml line here
-# but ensure player-service.yaml is updated with the REDIS_PASSWORD env var.
-# For now, keep it manual until player-service.yaml is updated below.
+# Ensure player-service.yaml references the 'redis-cluster' secret and 'redis-password' key
 kubectl apply -f player-service.yaml
 
 echo "Waiting for Player Service pods to be ready..."
@@ -71,10 +72,7 @@ kubectl wait --namespace minecraft-cluster --for=condition=ready pod -l app=play
 
 # Deploy Game Service
 echo "Deploying Game Service (Deployment and Service)..."
-# IMPORTANT: You will need to apply game-service.yaml AFTER this script,
-# or add the kubectl apply -f game-service.yaml line here
-# but ensure game-service.yaml is updated with the REDIS_PASSWORD env var.
-# For now, keep it manual until game-service.yaml is updated below.
+# Ensure game-service.yaml references the 'redis-cluster' secret and 'redis-password' key
 kubectl apply -f game-service.yaml
 
 echo "Waiting for Game Service pods to be ready..."
@@ -100,7 +98,8 @@ echo "To get the external IP for the Gate Proxy (if K3s/MetalLB has allocated an
 echo "kubectl get svc gate-proxy-service -n minecraft-cluster"
 echo ""
 echo "To connect to the Redis cluster client (password needed):"
-echo "export REDIS_PASSWORD=$(kubectl get secret --namespace minecraft-cluster $REDIS_SECRET_NAME -o jsonpath=\"{.data.password}\" | base64 -d)"
+# Fetching the password from the secret created by the Helm chart
+echo "export REDIS_PASSWORD=$(kubectl get secret --namespace minecraft-cluster redis-cluster -o jsonpath=\"{.data.redis-password}\" | base64 -d)"
 echo "kubectl run --namespace minecraft-cluster minecraft-redis-cluster-client --rm --tty -i --restart='Never' --image docker.io/bitnami/redis-cluster:7.2.4-debian-12-r11 -- bash"
 echo "  # Once inside the container, run:"
-echo "  # redis-cli -c -a $REDIS_PASSWORD -h redis-cluster"
+echo "  # redis-cli -c -a \$REDIS_PASSWORD -h redis-cluster"
