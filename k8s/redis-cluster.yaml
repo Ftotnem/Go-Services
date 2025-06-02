@@ -30,7 +30,9 @@ data:
     protected-mode no 
     bind 0.0.0.0
     loglevel notice
-    cluster-preferred-endpoint-type hostname
+    # cluster-announce-hostname is handled by 'cluster-preferred-endpoint-type hostname'
+    # in combination with the HOSTNAME env var, so we don't need a specific directive here.
+    cluster-preferred-endpoint-type hostname # Keep this
   
   bootstrap.sh: |
     #!/bin/bash
@@ -38,11 +40,6 @@ data:
 
     # Start Redis in the background
     echo "Starting Redis server..."
-    # Use 'exec' to replace the current shell process with redis-server.
-    # This is a common practice in Docker/Kubernetes entrypoints
-    # to ensure signals are handled correctly.
-    # Also, run redis-server in the foreground. We will perform cluster announce
-    # and other bootstrap steps by executing redis-cli commands.
     redis-server /etc/redis/redis.conf & # Run in background for bootstrap logic
     REDIS_PID=$!
 
@@ -54,18 +51,9 @@ data:
     done
     echo "Local Redis instance is pingable."
 
-    # --- NEW: Dynamically set cluster-announce-hostname after Redis starts ---
-    # Construct the fully qualified domain name (FQDN)
-    # HOSTNAME is from Kubernetes metadata.name (e.g., redis-cluster-0)
-    # The service name is redis-cluster.
-    # The namespace is minecraft-cluster.
-    # The cluster domain is svc.cluster.local (standard Kubernetes)
-    FULL_HOSTNAME="${HOSTNAME}.redis-cluster.minecraft-cluster.svc.cluster.local"
-    echo "Setting cluster-announce-hostname to: $FULL_HOSTNAME"
-    # Use redis-cli to set the cluster-announce-hostname
-    redis-cli CLUSTER SET-CONFIG-EPOCH 0 # Needed for cluster announce command (though not strictly for announce itself)
-    redis-cli CLUSTER ANNOUNCE "$FULL_HOSTNAME:6379"
-    # --- END NEW ---
+    # We are now relying on 'cluster-preferred-endpoint-type hostname'
+    # and the HOSTNAME env var to correctly announce the node.
+    # The explicit CLUSTER ANNOUNCE command is removed due to errors.
 
     # Check if we're already part of a cluster.
     if redis-cli cluster info | grep -q "cluster_state:ok"; then
@@ -100,6 +88,7 @@ data:
         echo "Resetting cluster state on all nodes (if any exists)..."
         for i in {0..5}; do
             POD_FQDN="redis-cluster-$i.redis-cluster.minecraft-cluster.svc.cluster.local"
+            # Use 'timeout' for robustness, in case a node is unresponsive
             timeout 10 redis-cli -h "$POD_FQDN" cluster reset hard 2>/dev/null || true
         done
         sleep 5 # Give some time for resets to propagate
@@ -144,7 +133,7 @@ spec:
     spec:
       containers:
       - name: redis
-        image: redis:7.0-alpine
+        image: redis:7.0-alpine" # Sticking with 7.0-alpine for now
         command: ["/bin/sh"]
         args: ["/etc/redis/bootstrap.sh"]
         ports:
@@ -158,7 +147,7 @@ spec:
         - name: redis-data
           mountPath: /data
         env:
-        # HOSTNAME is crucial for cluster-announce-hostname
+        # HOSTNAME is crucial for cluster-announce-hostname to work via DNS
         - name: HOSTNAME
           valueFrom:
             fieldRef:
