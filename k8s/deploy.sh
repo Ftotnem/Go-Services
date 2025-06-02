@@ -20,7 +20,7 @@ helm repo update
 
 # Check if the Redis secret already exists to retrieve the password for upgrades
 REDIS_SECRET_NAME="redis-cluster"
-REDIS_PASSWORD_KEY="redis-password"
+REDIS_PASSWORD_KEY="redis-password" # This is the key used by the Bitnami chart for the password
 REDIS_CURRENT_PASSWORD=""
 
 if kubectl get secret "$REDIS_SECRET_NAME" -n minecraft-cluster &> /dev/null; then
@@ -28,13 +28,15 @@ if kubectl get secret "$REDIS_SECRET_NAME" -n minecraft-cluster &> /dev/null; th
     REDIS_CURRENT_PASSWORD=$(kubectl get secret "$REDIS_SECRET_NAME" -n minecraft-cluster -o jsonpath="{.data.$REDIS_PASSWORD_KEY}" | base64 -d)
     echo "Using existing Redis password for upgrade."
 else
-    echo "No existing Redis secret '$REDIS_SECRET_NAME' found. Helm will generate a new password."
+    echo "No existing Redis secret '$REDIS_SECRET_NAME' found. Helm will generate a new password on first install."
 fi
 
-# Construct the --set argument for the password if it exists
+# Construct the --set argument for the password.
+# IMPORTANT FIX: Removed redundant quotes around $REDIS_CURRENT_PASSWORD
 REDIS_PASSWORD_SET_ARG=""
 if [ -n "$REDIS_CURRENT_PASSWORD" ]; then
-    REDIS_PASSWORD_SET_ARG="--set password=\"$REDIS_CURRENT_PASSWORD\""
+    # Corrected: Remove the inner \" and rely on Helm to handle quoting
+    REDIS_PASSWORD_SET_ARG="--set password=$REDIS_CURRENT_PASSWORD"
 fi
 
 # Use helm upgrade --install to create or update the Redis Cluster
