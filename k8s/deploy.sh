@@ -34,7 +34,7 @@ fi
 # Construct the --set argument for the password if it exists
 REDIS_PASSWORD_SET_ARG=""
 if [ -n "$REDIS_CURRENT_PASSWORD" ]; then
-    REDIS_PASSWORD_SET_ARG="--set auth.password=\"$REDIS_CURRENT_PASSWORD\""
+    REDIS_PASSWORD_SET_ARG="--set password=\"$REDIS_CURRENT_PASSWORD\""
 fi
 
 # Use helm upgrade --install to create or update the Redis Cluster
