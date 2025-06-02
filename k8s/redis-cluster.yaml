@@ -30,7 +30,7 @@ data:
     protected-mode no 
     bind 0.0.0.0
     loglevel notice
-    cluster-announce-hostname $(HOSTNAME) # CORRECTED: Use $(HOSTNAME) for stable pod identity
+    cluster-announce-hostname $(HOSTNAME)
     cluster-preferred-endpoint-type hostname
   
   bootstrap.sh: |
