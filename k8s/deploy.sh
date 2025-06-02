@@ -16,7 +16,8 @@ kubectl apply -f namespace.yaml
 echo "Deploying Redis Cluster using Bitnami Helm chart (without password)..."
 
 # Add Bitnami Helm repository (if not already added)
-helm repo add bitnami https://charts.bitnami.com/bitnami --allow-repo-urls || echo "Bitnami repo already added."
+# Removed the --allow-repo-urls flag
+helm repo add bitnami https://charts.bitnami.com/bitnami || echo "Bitnami repo already added."
 
 # Update Helm repositories to ensure latest chart versions are available
 helm repo update
