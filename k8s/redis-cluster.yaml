@@ -30,67 +30,91 @@ data:
     protected-mode no 
     bind 0.0.0.0
     loglevel notice
-    cluster-announce-hostname-prefix redis-cluster
+    cluster-announce-hostname $(HOSTNAME) # CORRECTED: Use $(HOSTNAME) for stable pod identity
     cluster-preferred-endpoint-type hostname
   
   bootstrap.sh: |
     #!/bin/bash
     set -e
-    
+
     # Start Redis in the background
+    echo "Starting Redis server..."
     redis-server /etc/redis/redis.conf &
     REDIS_PID=$!
-    
-    # Wait for Redis to start
-    sleep 10
-    
-    # Check if we're already part of a cluster
+
+    # Wait for this specific Redis instance to be locally reachable.
+    # This ensures the 'ping' readiness probe will eventually pass.
+    echo "Waiting for local Redis instance to be ready for ping..."
+    while ! redis-cli ping > /dev/null 2>&1; do
+        echo "Waiting for local Redis ping..."
+        sleep 2
+    done
+    echo "Local Redis instance is pingable."
+
+    # Check if we're already part of a cluster.
+    # This check is crucial for restarted nodes with persistent data.
     if redis-cli cluster info | grep -q "cluster_state:ok"; then
-        echo "Already part of a working cluster"
-        wait $REDIS_PID
+        echo "Already part of a working cluster. Exiting bootstrap phase and keeping Redis running."
+        wait $REDIS_PID # Keep Redis running indefinitely
         exit 0
     fi
-    
-    # Check if this is the first node (redis-cluster-0)
+
+    # This is the first node (redis-cluster-0) logic for initial cluster creation
     if [[ "$HOSTNAME" == "redis-cluster-0" ]]; then
-        # Wait for all other nodes to be ready
-        echo "Waiting for all Redis nodes to be ready..."
+        echo "This is redis-cluster-0, initiating cluster formation if necessary..."
+
+        # Wait for all other nodes to be individually reachable (pingable)
+        # This is important before attempting to create the cluster.
+        echo "Waiting for all other Redis nodes to become individually reachable (pingable)..."
         for i in {1..5}; do
-            while ! redis-cli -h redis-cluster-$i.redis-cluster.minecraft-cluster.svc.cluster.local ping > /dev/null 2>&1; do
-                echo "Waiting for redis-cluster-$i..."
+            POD_FQDN="redis-cluster-$i.redis-cluster.minecraft-cluster.svc.cluster.local"
+            while ! redis-cli -h "$POD_FQDN" ping > /dev/null 2>&1; do
+                echo "Waiting for $POD_FQDN to be pingable..."
                 sleep 5
             done
+            echo "$POD_FQDN is pingable."
         done
-        
+
         # Try to create cluster
-        echo "Creating Redis cluster..."
+        echo "Attempting to create Redis cluster..."
         NODES=""
         for i in {0..5}; do
             NODES="$NODES redis-cluster-$i.redis-cluster.minecraft-cluster.svc.cluster.local:6379"
         done
-        
-        # Reset any existing cluster state first
+
+        # Reset any existing cluster state first for a clean creation
+        echo "Resetting cluster state on all nodes (if any exists)..."
         for i in {0..5}; do
-            redis-cli -h redis-cluster-$i.redis-cluster.minecraft-cluster.svc.cluster.local cluster reset hard 2>/dev/null || true
+            POD_FQDN="redis-cluster-$i.redis-cluster.minecraft-cluster.svc.cluster.local"
+            timeout 10 redis-cli -h "$POD_FQDN" cluster reset hard 2>/dev/null || true
         done
-        
-        sleep 5
-        
+        sleep 5 # Give some time for resets to propagate
+
         # Create new cluster
-        redis-cli --cluster create $NODES --cluster-replicas 1 --cluster-yes
-        
-        echo "Cluster created successfully"
+        echo "Executing cluster creation command..."
+        # The --cluster-yes is for automated, non-interactive creation
+        if ! redis-cli --cluster create $NODES --cluster-replicas 1 --cluster-yes; then
+            echo "ERROR: Failed to create Redis cluster. This pod might restart and retry."
+            exit 1 # Exit with an error to force Kubernetes to restart the pod
+        fi
+        echo "Redis cluster creation initiated by redis-cluster-0."
+
     else
-        echo "Not the primary node, waiting for cluster to be formed..."
-        # Wait for cluster to be formed
+        echo "Not the primary node ($HOSTNAME). Waiting for cluster to be formed..."
+        # Other nodes simply start their Redis instance and wait for the cluster
+        # to be formed by redis-cluster-0, or for their persistent nodes.conf
+        # to allow them to rejoin.
         while ! redis-cli cluster info | grep -q "cluster_state:ok"; do
+            echo "$HOSTNAME: Cluster not yet formed or healthy, waiting..."
             sleep 10
         done
-        echo "Cluster is ready"
+        echo "$HOSTNAME: Cluster is ready, this node has joined/rejoined."
     fi
-    
-    # Keep Redis running
+
+    # Keep Redis running indefinitely after bootstrap
+    echo "Bootstrap complete. Keeping Redis server running..."
     wait $REDIS_PID
+    echo "Redis server stopped." # This line should ideally never be reached
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -124,10 +148,7 @@ spec:
         - name: redis-data
           mountPath: /data
         env:
-        - name: POD_IP
-          valueFrom:
-            fieldRef:
-              fieldPath: status.podIP
+        # HOSTNAME is crucial for cluster-announce-hostname
         - name: HOSTNAME
           valueFrom:
             fieldRef:
