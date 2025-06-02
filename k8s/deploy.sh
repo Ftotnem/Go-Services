@@ -21,16 +21,27 @@ helm repo add bitnami https://charts.bitnami.com/bitnami || echo "Bitnami repo a
 # Update Helm repositories to ensure latest chart versions are available
 helm repo update
 
+# Attempt to retrieve existing Redis password from secret for upgrade purposes.
+# This is necessary if a password was previously set and the chart requires it for upgrade.
+# If the secret doesn't exist or the password is truly empty, this will result in an empty REDIS_PASSWORD.
+echo "Attempting to retrieve existing Redis password for upgrade..."
+REDIS_PASSWORD=$(kubectl get secret --namespace "minecraft-cluster" redis-cluster -o jsonpath="{.data.redis-password}" 2>/dev/null | base64 -d || true)
+# The '|| true' ensures the script doesn't exit if the secret or password path doesn't exist yet.
+
 # Install or upgrade the Redis Cluster chart, disabling password authentication
 # --install: If the release does not exist, install it.
 # --wait: Helm will wait for all resources in the release to be ready (including Redis pods)
 # --timeout: Maximum time to wait for the deployment to succeed
 # --set auth.enabled=false: This is the key change to disable password authentication.
-# --set auth.password="": Explicitly set an empty password, in case the client attempts to authenticate with one.
+# --set auth.password="": Explicitly set an empty password for the new configuration.
+# --set auth.password=$REDIS_PASSWORD: Pass the *current* password for the upgrade process.
+# Note: The chart logic will handle the transition. We provide the old password for upgrade,
+# and explicitly set the new desired state (no password) via auth.enabled=false and auth.password="".
 helm upgrade --install redis-cluster bitnami/redis-cluster \
   --namespace minecraft-cluster \
   --set auth.enabled=false \
   --set auth.password="" \
+  --set auth.password=$REDIS_PASSWORD \
   --wait \
   --timeout 600s
 
