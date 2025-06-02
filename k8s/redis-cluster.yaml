@@ -17,17 +17,25 @@ data:
   # and start the server.
   start-redis.sh: |
     #!/bin/sh
-    # Copy the base config to a writable location within the persistent volume
-    # The /data directory is where Redis stores its persistent data and is writable.
-    cp /etc/redis/redis.conf /data/redis.conf
+    # Define the path for the final configuration file
+    FINAL_REDIS_CONF="/data/redis.conf"
+
+    # Start building the final configuration file
+    # Read the base config from the ConfigMap and write it to the final location
+    cat /etc/redis/redis.conf > "$FINAL_REDIS_CONF"
 
     # Dynamically append the cluster-announce directives using the POD_NAME
-    echo "cluster-announce-hostname ${POD_NAME}.redis-cluster.minecraft-cluster.svc.cluster.local" >> /data/redis.conf
-    echo "cluster-announce-port 6379" >> /data/redis.conf
-    echo "cluster-announce-bus-port 16379" >> /data/redis.conf
+    echo "cluster-announce-hostname ${POD_NAME}.redis-cluster.minecraft-cluster.svc.cluster.local" >> "$FINAL_REDIS_CONF"
+    echo "cluster-announce-port 6379" >> "$FINAL_REDIS_CONF"
+    echo "cluster-announce-bus-port 16379" >> "$FINAL_REDIS_CONF"
 
-    # Execute Redis server with the generated config from the /data directory
-    exec redis-server /data/redis.conf
+    # Log the final configuration for debugging purposes (optional, but helpful)
+    echo "--- Final Redis Configuration ---"
+    cat "$FINAL_REDIS_CONF"
+    echo "-------------------------------"
+
+    # Execute Redis server with the dynamically generated config
+    exec redis-server "$FINAL_REDIS_CONF"
 ---
 apiVersion: v1
 kind: Service
