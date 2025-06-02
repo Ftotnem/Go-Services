@@ -41,7 +41,6 @@ helm upgrade --install redis-cluster bitnami/redis-cluster \
   --namespace minecraft-cluster \
   --set auth.enabled=false \
   --set auth.password="" \
-  --set auth.password=$REDIS_PASSWORD \
   --wait \
   --timeout 600s
 
