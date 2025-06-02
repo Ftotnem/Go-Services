@@ -36,10 +36,8 @@ data:
     # This is necessary for Redis to be reachable within the Kubernetes network.
     bind 0.0.0.0
 
-    # Announce hostname, port, and bus port for Redis 7.0+ cluster.
-    # $(HOSTNAME) is dynamically replaced by Kubernetes with the pod's hostname (e.g., redis-cluster-0).
-    # This ensures nodes announce their correct, resolvable service names within the cluster.
-    cluster-announce-hostname $(HOSTNAME).redis-cluster.minecraft-cluster.svc.cluster.local
+    # Announce port and bus port for Redis 7.0+ cluster.
+    # The hostname is now passed directly via command-line arguments in the StatefulSet.
     cluster-announce-port 6379
     cluster-announce-bus-port 16379
 
@@ -91,13 +89,18 @@ spec:
           # Using a Redis 7.0+ image (e.g., 7.0.12-alpine)
           image: redis:7.0.12-alpine
           command: ["redis-server"]
-          args: ["/usr/local/etc/redis/redis.conf"]
+          args:
+            - "/usr/local/etc/redis/redis.conf"
+            # Pass cluster-announce-hostname directly as a command-line argument.
+            # $(HOSTNAME) is dynamically replaced by Kubernetes with the pod's hostname.
+            - "--cluster-announce-hostname"
+            - "$(HOSTNAME).redis-cluster.minecraft-cluster.svc.cluster.local"
           ports:
             - containerPort: 6379 # Client port
             - containerPort: 16379 # Cluster bus port
           env:
             # Inject the pod's hostname as an environment variable.
-            # This is used by the cluster-announce-hostname directive in redis.conf.
+            # This is used by the cluster-announce-hostname directive in args.
             - name: HOSTNAME
               valueFrom:
                 fieldRef:
