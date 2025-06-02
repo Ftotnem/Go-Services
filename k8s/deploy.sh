@@ -18,18 +18,6 @@ helm repo add bitnami https://charts.bitnami.com/bitnami || echo "Bitnami repo a
 # Update Helm repositories to ensure latest chart versions are available
 helm repo update
 
-# Generate a random password and store it in a Kubernetes Secret
-# This ensures the password is managed by Kubernetes and is consistently used.
-REDIS_SECRET_NAME="redis-cluster-password"
-if ! kubectl get secret "$REDIS_SECRET_NAME" -n minecraft-cluster &>/dev/null; then
-    REDIS_GENERATED_PASSWORD=$(openssl rand -base64 12)
-    echo "Creating Kubernetes secret '$REDIS_SECRET_NAME' for Redis password..."
-    kubectl create secret generic "$REDIS_SECRET_NAME" \
-        --from-literal=password="$REDIS_GENERATED_PASSWORD" \
-        --namespace minecraft-cluster
-else
-    echo "Secret '$REDIS_SECRET_NAME' already exists. Using existing password for upgrade."
-fi
 
 # Install or upgrade the Redis Cluster chart, enabling password authentication
 # --install: If the release does not exist, install it.
@@ -41,8 +29,6 @@ fi
 helm upgrade --install redis-cluster bitnami/redis-cluster \
   --namespace minecraft-cluster \
   --set auth.enabled=true \
-  --set auth.existingSecret="$REDIS_SECRET_NAME" \
-  --set auth.passwordKey="password" \
   --wait \
   --timeout 600s
 
