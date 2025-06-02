@@ -26,8 +26,8 @@ spec:
         - name: REDIS_PASSWORD # ADD THIS NEW ENVIRONMENT VARIABLE
           valueFrom:
             secretKeyRef:
-              name: redis-cluster-password # Name of the secret created in deploy.sh
-              key: password # Key within the secret that holds the password
+              name: redis-cluster # Name of the secret created in deploy.sh
+              key: redis-password # Key within the secret that holds the password
         - name: GAME_SERVICE_LISTEN_ADDR
           value: ":8082"
         - name: PLAYERS_SERVICE_URL
