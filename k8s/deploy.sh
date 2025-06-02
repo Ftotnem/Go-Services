@@ -105,3 +105,4 @@ echo "export REDIS_PASSWORD=$(kubectl get secret --namespace minecraft-cluster r
 echo "kubectl run --namespace minecraft-cluster minecraft-redis-cluster-client --rm --tty -i --restart='Never' --image docker.io/bitnami/redis-cluster:7.2.4-debian-12-r11 -- bash"
 echo "  # Once inside the container, run:"
 echo "  # redis-cli -c -a \$REDIS_PASSWORD -h redis-cluster"
+echo " # obama"
