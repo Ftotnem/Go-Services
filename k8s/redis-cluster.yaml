@@ -30,9 +30,7 @@ data:
     protected-mode no 
     bind 0.0.0.0
     loglevel notice
-    # cluster-announce-hostname is handled by 'cluster-preferred-endpoint-type hostname'
-    # in combination with the HOSTNAME env var, so we don't need a specific directive here.
-    cluster-preferred-endpoint-type hostname # Keep this
+    cluster-preferred-endpoint-type hostname
   
   bootstrap.sh: |
     #!/bin/bash
