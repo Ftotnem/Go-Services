@@ -18,18 +18,30 @@ helm repo add bitnami https://charts.bitnami.com/bitnami || echo "Bitnami repo a
 # Update Helm repositories to ensure latest chart versions are available
 helm repo update
 
+# --- NEW: Forceful cleanup of previous Redis Helm release before re-install ---
+echo "Attempting to uninstall existing Redis Cluster Helm release to ensure a clean slate..."
+helm uninstall redis-cluster --namespace minecraft-cluster --no-hooks --wait || true # --no-hooks helps if hooks are stuck, --wait ensures it completes
+echo "Existing Redis Cluster Helm release uninstalled (if it existed)."
 
-# Install or upgrade the Redis Cluster chart, enabling password authentication
-# --install: If the release does not exist, install it.
-# --wait: Helm will wait for all resources in the release to be ready (including Redis pods)
-# --timeout: Maximum time to wait for the deployment to succeed
-# --set auth.enabled=true: Enable authentication
-# --set auth.existingSecret=$REDIS_SECRET_NAME: Tell Helm to get the password from this secret
-# --set auth.passwordKey=password: Specify the key within the secret that holds the password
-helm upgrade --install redis-cluster bitnami/redis-cluster \
+# Generate a random password and store it in a Kubernetes Secret
+# This ensures the password is managed by Kubernetes and is consistently used.
+REDIS_SECRET_NAME="redis-cluster-password"
+# --- NEW: Always recreate the secret to ensure it's fresh ---
+echo "Creating/recreating Kubernetes secret '$REDIS_SECRET_NAME' for Redis password..."
+# Delete the secret if it exists, then recreate it
+kubectl delete secret "$REDIS_SECRET_NAME" -n minecraft-cluster --ignore-not-found=true
+REDIS_GENERATED_PASSWORD=$(openssl rand -base64 12)
+kubectl create secret generic "$REDIS_SECRET_NAME" \
+    --from-literal=password="$REDIS_GENERATED_PASSWORD" \
+    --namespace minecraft-cluster
+
+# Install the Redis Cluster chart with the newly generated password
+# Removed auth.existingSecret and auth.passwordKey as the chart creates its own secret 'redis-cluster'
+# and directly setting the password is more reliable for 'requirepass'.
+helm install redis-cluster bitnami/redis-cluster \
   --namespace minecraft-cluster \
   --set auth.enabled=true \
-  --set password=$REDIS_PASSWORD
+  --set auth.password="$REDIS_GENERATED_PASSWORD" \ # --- NEW: Directly set the password ---
   --wait \
   --timeout 600s
 
