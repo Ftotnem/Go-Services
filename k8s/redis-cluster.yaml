@@ -30,7 +30,6 @@ data:
     protected-mode no 
     bind 0.0.0.0
     loglevel notice
-    cluster-announce-hostname $(HOSTNAME)
     cluster-preferred-endpoint-type hostname
   
   bootstrap.sh: |
@@ -39,11 +38,15 @@ data:
 
     # Start Redis in the background
     echo "Starting Redis server..."
-    redis-server /etc/redis/redis.conf &
+    # Use 'exec' to replace the current shell process with redis-server.
+    # This is a common practice in Docker/Kubernetes entrypoints
+    # to ensure signals are handled correctly.
+    # Also, run redis-server in the foreground. We will perform cluster announce
+    # and other bootstrap steps by executing redis-cli commands.
+    redis-server /etc/redis/redis.conf & # Run in background for bootstrap logic
     REDIS_PID=$!
 
     # Wait for this specific Redis instance to be locally reachable.
-    # This ensures the 'ping' readiness probe will eventually pass.
     echo "Waiting for local Redis instance to be ready for ping..."
     while ! redis-cli ping > /dev/null 2>&1; do
         echo "Waiting for local Redis ping..."
@@ -51,8 +54,20 @@ data:
     done
     echo "Local Redis instance is pingable."
 
+    # --- NEW: Dynamically set cluster-announce-hostname after Redis starts ---
+    # Construct the fully qualified domain name (FQDN)
+    # HOSTNAME is from Kubernetes metadata.name (e.g., redis-cluster-0)
+    # The service name is redis-cluster.
+    # The namespace is minecraft-cluster.
+    # The cluster domain is svc.cluster.local (standard Kubernetes)
+    FULL_HOSTNAME="${HOSTNAME}.redis-cluster.minecraft-cluster.svc.cluster.local"
+    echo "Setting cluster-announce-hostname to: $FULL_HOSTNAME"
+    # Use redis-cli to set the cluster-announce-hostname
+    redis-cli CLUSTER SET-CONFIG-EPOCH 0 # Needed for cluster announce command (though not strictly for announce itself)
+    redis-cli CLUSTER ANNOUNCE "$FULL_HOSTNAME:6379"
+    # --- END NEW ---
+
     # Check if we're already part of a cluster.
-    # This check is crucial for restarted nodes with persistent data.
     if redis-cli cluster info | grep -q "cluster_state:ok"; then
         echo "Already part of a working cluster. Exiting bootstrap phase and keeping Redis running."
         wait $REDIS_PID # Keep Redis running indefinitely
@@ -64,7 +79,6 @@ data:
         echo "This is redis-cluster-0, initiating cluster formation if necessary..."
 
         # Wait for all other nodes to be individually reachable (pingable)
-        # This is important before attempting to create the cluster.
         echo "Waiting for all other Redis nodes to become individually reachable (pingable)..."
         for i in {1..5}; do
             POD_FQDN="redis-cluster-$i.redis-cluster.minecraft-cluster.svc.cluster.local"
@@ -92,18 +106,14 @@ data:
 
         # Create new cluster
         echo "Executing cluster creation command..."
-        # The --cluster-yes is for automated, non-interactive creation
         if ! redis-cli --cluster create $NODES --cluster-replicas 1 --cluster-yes; then
             echo "ERROR: Failed to create Redis cluster. This pod might restart and retry."
-            exit 1 # Exit with an error to force Kubernetes to restart the pod
+            exit 1
         fi
         echo "Redis cluster creation initiated by redis-cluster-0."
 
     else
         echo "Not the primary node ($HOSTNAME). Waiting for cluster to be formed..."
-        # Other nodes simply start their Redis instance and wait for the cluster
-        # to be formed by redis-cluster-0, or for their persistent nodes.conf
-        # to allow them to rejoin.
         while ! redis-cli cluster info | grep -q "cluster_state:ok"; do
             echo "$HOSTNAME: Cluster not yet formed or healthy, waiting..."
             sleep 10
@@ -114,7 +124,7 @@ data:
     # Keep Redis running indefinitely after bootstrap
     echo "Bootstrap complete. Keeping Redis server running..."
     wait $REDIS_PID
-    echo "Redis server stopped." # This line should ideally never be reached
+    echo "Redis server stopped."
 ---
 apiVersion: apps/v1
 kind: StatefulSet
