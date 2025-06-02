@@ -1,67 +1,15 @@
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: redis-cluster-config
-  namespace: minecraft-cluster
-data:
-  redis.conf: |
-    # Redis 7.0+ Cluster Configuration
-    # This configuration enables Redis in cluster mode.
-
-    # Enable cluster mode
-    cluster-enabled yes
-
-    # The cluster configuration file.
-    # Redis will write the cluster configuration to this file.
-    cluster-config-file nodes.conf
-
-    # Node timeout in milliseconds.
-    # If a master node is not reachable for this amount of time,
-    # its slaves will failover.
-    cluster-node-timeout 5000
-
-    # Enable AOF persistence.
-    # This ensures data durability by logging every write operation.
-    appendonly yes
-
-    # Port for client connections.
-    port 6379
-
-    # Disable protected mode for easier access within Kubernetes.
-    # In production, consider enabling this and configuring authentication.
-    protected-mode no
-
-    # Bind to all network interfaces.
-    # This is necessary for Redis to be reachable within the Kubernetes network.
-    bind 0.0.0.0
-
-    # Announce port and bus port for Redis 7.0+ cluster.
-    # The hostname is now passed directly via command-line arguments in the StatefulSet.
-    cluster-announce-port 6379
-    cluster-announce-bus-port 16379
-
-    # Set the working directory for Redis data files.
-    dir /data
----
 apiVersion: v1
 kind: Service
 metadata:
   name: redis-cluster
   namespace: minecraft-cluster
+  labels:
+    app: redis-cluster
 spec:
-  # This is a headless service, crucial for StatefulSets.
-  # It creates DNS entries for each pod (e.g., redis-cluster-0.redis-cluster.minecraft-cluster.svc.cluster.local).
-  clusterIP: None
   ports:
-    # Client port
-    - name: client
-      port: 6379
-      targetPort: 6379
-    # Cluster bus port
-    - name: bus
-      port: 16379
-      targetPort: 16379
+  - port: 6379
+    name: redis
+  clusterIP: None # This makes it a headless service
   selector:
     app: redis-cluster
 ---
@@ -71,11 +19,8 @@ metadata:
   name: redis-cluster
   namespace: minecraft-cluster
 spec:
-  # Number of Redis cluster nodes.
-  # For a production Redis cluster, it's recommended to have at least 3 master nodes.
-  # A 3-node cluster will have 3 masters and 0 replicas by default.
-  replicas: 3
-  serviceName: redis-cluster # Must match the headless service name
+  serviceName: "redis-cluster"
+  replicas: 6
   selector:
     matchLabels:
       app: redis-cluster
@@ -85,76 +30,59 @@ spec:
         app: redis-cluster
     spec:
       containers:
-        - name: redis
-          # Using a Redis 7.0+ image (e.g., 7.0.12-alpine)
-          image: redis:7.0.12-alpine
-          command: ["redis-server"]
-          args:
-            - "/usr/local/etc/redis/redis.conf"
-            # Pass cluster-announce-hostname directly as a command-line argument.
-            # $(HOSTNAME) is dynamically replaced by Kubernetes with the pod's hostname.
-            - "--cluster-announce-hostname"
-            - "$(HOSTNAME).redis-cluster.minecraft-cluster.svc.cluster.local"
-          ports:
-            - containerPort: 6379 # Client port
-            - containerPort: 16379 # Cluster bus port
-          env:
-            # Inject the pod's hostname as an environment variable.
-            # This is used by the cluster-announce-hostname directive in args.
-            - name: HOSTNAME
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.name
-          volumeMounts:
-            # Mount the redis.conf from the ConfigMap
-            - name: config
-              mountPath: /usr/local/etc/redis/redis.conf
-              subPath: redis.conf
-            # Mount the persistent volume for Redis data
-            - name: redis-data
-              mountPath: /data
-          livenessProbe:
-            # Checks if the Redis server is alive by pinging it.
-            exec:
-              command: ["redis-cli", "ping"]
-            initialDelaySeconds: 10
-            periodSeconds: 5
-            timeoutSeconds: 5
-          readinessProbe:
-            # Checks if the Redis server is ready to accept connections and is part of a healthy cluster.
-            # This probe is more robust for cluster environments.
-            exec:
-              command:
-                - sh
-                - -c
-                - |
-                  REDIS_PASSWORD=$(cat /etc/redis/secrets/redis-password || echo "")
-                  if [ -n "$REDIS_PASSWORD" ]; then
-                    redis-cli -a "$REDIS_PASSWORD" ping && redis-cli -a "$REDIS_PASSWORD" cluster info | grep -q "cluster_state:ok"
-                  else
-                    redis-cli ping && redis-cli cluster info | grep -q "cluster_state:ok"
-                  fi
-            initialDelaySeconds: 20
-            periodSeconds: 10
-            timeoutSeconds: 5
-          resources:
-            requests:
-              cpu: "100m"
-              memory: "128Mi"
-            limits:
-              cpu: "500m"
-              memory: "512Mi"
+      - name: redis
+        image: redis:7.0-alpine
+        command: ["redis-server"]
+        args: ["/etc/redis/redis.conf", "--appendonly", "yes"]
+        ports:
+        - containerPort: 6379
+          name: redis
+        volumeMounts:
+        - name: redis-config
+          mountPath: /etc/redis/redis.conf
+          subPath: redis.conf
+        - name: redis-data
+          mountPath: /data
+        env:
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: HOSTNAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        # Add entrypoint to initialize cluster if it's the first node
+        # This part often requires a custom entrypoint script or an operator
+        # For simplicity, we are assuming manual cluster creation or an operator for now.
+        # This setup will create 6 independent Redis instances.
+        # To truly form a cluster, you would need to run `redis-cli --cluster create`
+        # from one of the pods after they are all up.
       volumes:
-        # Volume for the ConfigMap
-        - name: config
-          configMap:
-            name: redis-cluster-config
+      - name: redis-config
+        configMap:
+          name: redis-cluster-config
   volumeClaimTemplates:
-    # Persistent Volume Claim Template for each Redis pod
-    - metadata:
-        name: redis-data
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        resources:
-          requests:
-            storage: 1Gi # Adjust storage size as needed
+  - metadata:
+      name: redis-data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 1Gi # Adjust storage as needed
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-cluster-config
+  namespace: minecraft-cluster
+data:
+  redis.conf: |
+    port 6379
+    cluster-enabled yes
+    cluster-config-file nodes.conf
+    cluster-node-timeout 5000
+    appendonly yes
+    protected-mode no 
+    bind 0.0.0.0
+    loglevel notice
