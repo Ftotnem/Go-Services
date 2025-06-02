@@ -9,9 +9,88 @@ spec:
   ports:
   - port: 6379
     name: redis
+  - port: 16379
+    name: cluster
   clusterIP: None # This makes it a headless service
   selector:
     app: redis-cluster
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-cluster-config
+  namespace: minecraft-cluster
+data:
+  redis.conf: |
+    port 6379
+    cluster-enabled yes
+    cluster-config-file nodes.conf
+    cluster-node-timeout 5000
+    appendonly yes
+    protected-mode no 
+    bind 0.0.0.0
+    loglevel notice
+    cluster-announce-hostname-prefix redis-cluster
+    cluster-preferred-endpoint-type hostname
+  
+  bootstrap.sh: |
+    #!/bin/bash
+    set -e
+    
+    # Start Redis in the background
+    redis-server /etc/redis/redis.conf &
+    REDIS_PID=$!
+    
+    # Wait for Redis to start
+    sleep 10
+    
+    # Check if we're already part of a cluster
+    if redis-cli cluster info | grep -q "cluster_state:ok"; then
+        echo "Already part of a working cluster"
+        wait $REDIS_PID
+        exit 0
+    fi
+    
+    # Check if this is the first node (redis-cluster-0)
+    if [[ "$HOSTNAME" == "redis-cluster-0" ]]; then
+        # Wait for all other nodes to be ready
+        echo "Waiting for all Redis nodes to be ready..."
+        for i in {1..5}; do
+            while ! redis-cli -h redis-cluster-$i.redis-cluster.minecraft-cluster.svc.cluster.local ping > /dev/null 2>&1; do
+                echo "Waiting for redis-cluster-$i..."
+                sleep 5
+            done
+        done
+        
+        # Try to create cluster
+        echo "Creating Redis cluster..."
+        NODES=""
+        for i in {0..5}; do
+            NODES="$NODES redis-cluster-$i.redis-cluster.minecraft-cluster.svc.cluster.local:6379"
+        done
+        
+        # Reset any existing cluster state first
+        for i in {0..5}; do
+            redis-cli -h redis-cluster-$i.redis-cluster.minecraft-cluster.svc.cluster.local cluster reset hard 2>/dev/null || true
+        done
+        
+        sleep 5
+        
+        # Create new cluster
+        redis-cli --cluster create $NODES --cluster-replicas 1 --cluster-yes
+        
+        echo "Cluster created successfully"
+    else
+        echo "Not the primary node, waiting for cluster to be formed..."
+        # Wait for cluster to be formed
+        while ! redis-cli cluster info | grep -q "cluster_state:ok"; do
+            sleep 10
+        done
+        echo "Cluster is ready"
+    fi
+    
+    # Keep Redis running
+    wait $REDIS_PID
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -32,15 +111,16 @@ spec:
       containers:
       - name: redis
         image: redis:7.0-alpine
-        command: ["redis-server"]
-        args: ["/etc/redis/redis.conf", "--appendonly", "yes"]
+        command: ["/bin/sh"]
+        args: ["/etc/redis/bootstrap.sh"]
         ports:
         - containerPort: 6379
           name: redis
+        - containerPort: 16379
+          name: cluster
         volumeMounts:
         - name: redis-config
-          mountPath: /etc/redis/redis.conf
-          subPath: redis.conf
+          mountPath: /etc/redis/
         - name: redis-data
           mountPath: /data
         env:
@@ -52,16 +132,25 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.name
-        # Add entrypoint to initialize cluster if it's the first node
-        # This part often requires a custom entrypoint script or an operator
-        # For simplicity, we are assuming manual cluster creation or an operator for now.
-        # This setup will create 6 independent Redis instances.
-        # To truly form a cluster, you would need to run `redis-cli --cluster create`
-        # from one of the pods after they are all up.
+        readinessProbe:
+          exec:
+            command:
+            - redis-cli
+            - ping
+          initialDelaySeconds: 15
+          periodSeconds: 5
+        livenessProbe:
+          exec:
+            command:
+            - redis-cli
+            - ping
+          initialDelaySeconds: 30
+          periodSeconds: 10
       volumes:
       - name: redis-config
         configMap:
           name: redis-cluster-config
+          defaultMode: 0755
   volumeClaimTemplates:
   - metadata:
       name: redis-data
@@ -69,20 +158,4 @@ spec:
       accessModes: [ "ReadWriteOnce" ]
       resources:
         requests:
-          storage: 1Gi # Adjust storage as needed
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: redis-cluster-config
-  namespace: minecraft-cluster
-data:
-  redis.conf: |
-    port 6379
-    cluster-enabled yes
-    cluster-config-file nodes.conf
-    cluster-node-timeout 5000
-    appendonly yes
-    protected-mode no 
-    bind 0.0.0.0
-    loglevel notice
+          storage: 1Gi
