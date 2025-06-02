@@ -70,7 +70,7 @@ data:
             POD_FQDN="redis-cluster-$i.redis-cluster.minecraft-cluster.svc.cluster.local"
             while ! redis-cli -h "$POD_FQDN" ping > /dev/null 2>&1; do
                 echo "Waiting for $POD_FQDN to be pingable..."
-                sleep 5
+                sleep 15
             done
             echo "$POD_FQDN is pingable."
         done
@@ -89,7 +89,7 @@ data:
             # Use 'timeout' for robustness, in case a node is unresponsive
             timeout 10 redis-cli -h "$POD_FQDN" cluster reset hard 2>/dev/null || true
         done
-        sleep 5 # Give some time for resets to propagate
+        sleep 15 # Give some time for resets to propagate
 
         # Create new cluster
         echo "Executing cluster creation command..."
@@ -103,7 +103,7 @@ data:
         echo "Not the primary node ($HOSTNAME). Waiting for cluster to be formed..."
         while ! redis-cli cluster info | grep -q "cluster_state:ok"; do
             echo "$HOSTNAME: Cluster not yet formed or healthy, waiting..."
-            sleep 10
+            sleep 15
         done
         echo "$HOSTNAME: Cluster is ready, this node has joined/rejoined."
     fi
