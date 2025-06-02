@@ -133,7 +133,7 @@ spec:
     spec:
       containers:
       - name: redis
-        image: redis:7.0-alpine" # Sticking with 7.0-alpine for now
+        image: redis:7.0-alpine
         command: ["/bin/sh"]
         args: ["/etc/redis/bootstrap.sh"]
         ports:
