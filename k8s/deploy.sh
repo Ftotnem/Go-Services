@@ -26,9 +26,11 @@ helm repo update
 # --wait: Helm will wait for all resources in the release to be ready (including Redis pods)
 # --timeout: Maximum time to wait for the deployment to succeed
 # --set auth.enabled=false: This is the key change to disable password authentication.
+# --set auth.password="": Explicitly set an empty password, in case the client attempts to authenticate with one.
 helm upgrade --install redis-cluster bitnami/redis-cluster \
   --namespace minecraft-cluster \
   --set auth.enabled=false \
+  --set auth.password="" \
   --wait \
   --timeout 600s
 
