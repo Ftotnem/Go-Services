@@ -5,17 +5,28 @@ metadata:
   name: redis-cluster-config
   namespace: minecraft-cluster
 data:
+  # Base Redis configuration. The cluster-announce directives will be added dynamically.
   redis.conf: |
-    # Basic Redis configuration for cluster
     port 6379
     cluster-enabled yes
     cluster-config-file nodes.conf
     cluster-node-timeout 5000
     appendonly yes
     protected-mode no
-    # The actual cluster-announce-hostname, -port, and -bus-port will be set
-    # via the StatefulSet's args, which allows using environment variables.
-    # This ConfigMap provides the base configuration.
+  # This script will be executed by the Redis container to set up the config
+  # and start the server.
+  start-redis.sh: |
+    #!/bin/sh
+    # Copy the base config to a writable location
+    cp /etc/redis/redis.conf /usr/local/etc/redis/redis.conf
+
+    # Dynamically append the cluster-announce directives using the POD_NAME
+    echo "cluster-announce-hostname ${POD_NAME}.redis-cluster.minecraft-cluster.svc.cluster.local" >> /usr/local/etc/redis/redis.conf
+    echo "cluster-announce-port 6379" >> /usr/local/etc/redis/redis.conf
+    echo "cluster-announce-bus-port 16379" >> /usr/local/etc/redis/redis.conf
+
+    # Execute Redis server with the generated config
+    exec redis-server /usr/local/etc/redis/redis.conf
 ---
 apiVersion: v1
 kind: Service
@@ -53,21 +64,8 @@ spec:
       containers:
       - name: redis
         image: redis:6.2.6 # Using a stable Redis version. Adjust if you use a different one.
-        command: ["redis-server"]
-        args:
-          - "/etc/redis/redis.conf" # Load base config from ConfigMap
-          - "--bind"
-          - "0.0.0.0" # Listen on all interfaces
-          - "--port"
-          - "6379"
-          # IMPORTANT: These arguments tell Redis to advertise its stable hostname
-          # instead of its ephemeral IP. This is crucial for Kubernetes environments.
-          - "--cluster-announce-hostname"
-          - "$(POD_NAME).redis-cluster.minecraft-cluster.svc.cluster.local"
-          - "--cluster-announce-port"
-          - "6379"
-          - "--cluster-announce-bus-port"
-          - "16379"
+        # Use the custom start-redis.sh script as the entrypoint
+        command: ["/bin/sh", "/etc/redis/start-redis.sh"]
         env:
           # This environment variable captures the stable hostname of the pod
           # (e.g., redis-cluster-0, redis-cluster-1, etc.)
@@ -83,13 +81,13 @@ spec:
         volumeMounts:
         - name: redis-data
           mountPath: /data # Persistent storage for Redis data and nodes.conf
-        - name: redis-config
-          mountPath: /etc/redis/redis.conf # Mount the ConfigMap as a file
-          subPath: redis.conf # Specify the file within the ConfigMap
+        - name: redis-config # Mount the ConfigMap containing redis.conf and start-redis.sh
+          mountPath: /etc/redis # Mount to /etc/redis
       volumes:
       - name: redis-config
         configMap:
           name: redis-cluster-config # Reference the ConfigMap defined above
+          defaultMode: 0755 # Ensure the script is executable
   volumeClaimTemplates:
   - metadata:
       name: redis-data
