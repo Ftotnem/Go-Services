@@ -9,12 +9,11 @@ echo "Deploying Kubernetes resources for Minecraft Cluster..."
 echo "Creating namespace 'minecraft-cluster'..."
 kubectl apply -f namespace.yaml
 
-# IMPORTANT SECURITY NOTE: Passwords are hardcoded or defaults are used.
-# This is INSECURE for production environments.
-# For Redis with Bitnami Helm chart, a password will be auto-generated and stored in a Secret.
+# IMPORTANT SECURITY NOTE: Password authentication for Redis is being explicitly disabled.
+# This is INSECURE for production environments and should ONLY be done in trusted, isolated development environments.
 
 # --- Deploy Redis Cluster using Bitnami Helm chart ---
-echo "Deploying Redis Cluster using Bitnami Helm chart..."
+echo "Deploying Redis Cluster using Bitnami Helm chart (without password)..."
 
 # Add Bitnami Helm repository (if not already added)
 helm repo add bitnami https://charts.bitnami.com/bitnami --allow-repo-urls || echo "Bitnami repo already added."
@@ -22,15 +21,17 @@ helm repo add bitnami https://charts.bitnami.com/bitnami --allow-repo-urls || ec
 # Update Helm repositories to ensure latest chart versions are available
 helm repo update
 
-# Install the Redis Cluster chart
+# Install the Redis Cluster chart, disabling password authentication
 # --wait: Helm will wait for all resources in the release to be ready (including Redis pods)
 # --timeout: Maximum time to wait for the deployment to succeed
+# --set auth.enabled=false: This is the key change to disable password authentication.
 helm install minecraft-redis-cluster bitnami/redis-cluster \
   --namespace minecraft-cluster \
+  --set auth.enabled=false \
   --wait \
   --timeout 600s
 
-echo "Redis Cluster deployed successfully by Helm."
+echo "Redis Cluster deployed successfully by Helm (password disabled)."
 echo "Helm has handled waiting for pods and forming the cluster automatically."
 
 # --- End Redis Cluster Deployment ---
@@ -76,11 +77,7 @@ echo ""
 echo "To get the external IP for the Gate Proxy (if K3s/MetalLB has allocated an IP):"
 echo "kubectl get svc gate-proxy-service -n minecraft-cluster"
 echo ""
-echo "To retrieve the Redis cluster password (if needed by other apps):"
-echo "kubectl get secret --namespace minecraft-cluster minecraft-redis-cluster -o jsonpath=\"{.data.redis-password}\" | base64 -d"
-echo ""
-echo "To connect to the Redis cluster client (e.g., for CLUSTER INFO):"
-echo "export REDIS_PASSWORD=\$(kubectl get secret --namespace minecraft-cluster minecraft-redis-cluster -o jsonpath=\"{.data.redis-password}\" | base64 -d)"
-echo "kubectl run --namespace minecraft-cluster minecraft-redis-cluster-client --rm --tty -i --restart='Never' --env REDIS_PASSWORD=\$REDIS_PASSWORD --image docker.io/bitnami/redis-cluster:7.2.4-debian-12-r11 -- bash"
+echo "To connect to the Redis cluster client (no password needed):"
+echo "kubectl run --namespace minecraft-cluster minecraft-redis-cluster-client --rm --tty -i --restart='Never' --image docker.io/bitnami/redis-cluster:7.2.4-debian-12-r11 -- bash"
 echo "  # Once inside the container, run:"
-echo "  # redis-cli -c -h minecraft-redis-cluster -a \$REDIS_PASSWORD"
+echo "  # redis-cli -c -h minecraft-redis-cluster"
