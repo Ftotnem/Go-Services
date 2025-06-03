@@ -46,7 +46,7 @@ check_ipv6_support() {
 create_redis_ipv6_values() {
     log_info "Creating Redis IPv6 configuration..."
     
-    cat > /tmp/redis-ipv6-values.yaml << EOF
+    cat > ./redis-ipv6-values.yaml << EOF
 # IPv6 and dual-stack configuration for Redis Cluster
 global:
   storageClass: "local-path"
@@ -121,7 +121,7 @@ EOF
 create_redis_standard_values() {
     log_info "Creating standard Redis configuration..."
     
-    cat > /tmp/redis-standard-values.yaml << EOF
+    cat > ./redis-standard-values.yaml << EOF
 # Standard configuration for Redis Cluster
 global:
   storageClass: "local-path"
@@ -177,10 +177,10 @@ deploy_redis_cluster() {
     fi
 
     # Determine which values file to use based on IPv6 support
-    VALUES_FILE="/tmp/redis-standard-values.yaml"
+    VALUES_FILE="./redis-standard-values.yaml"
     if check_ipv6_support; then
         create_redis_ipv6_values
-        VALUES_FILE="/tmp/redis-ipv6-values.yaml"
+        VALUES_FILE="./redis-ipv6-values.yaml"
         log_info "Using IPv6-enabled Redis configuration"
     else
         create_redis_standard_values
@@ -198,7 +198,7 @@ deploy_redis_cluster() {
       --timeout 600s
 
     # Clean up temporary files
-    rm -f /tmp/redis-ipv6-values.yaml /tmp/redis-standard-values.yaml
+    rm -f ./redis-ipv6-values.yaml ./redis-standard-values.yaml
 
     log_success "Redis Cluster deployed successfully!"
 }
@@ -239,9 +239,37 @@ verify_deployment() {
     fi
 }
 
+# Function to setup kubeconfig
+setup_kubeconfig() {
+    # Check if we have a working kubeconfig
+    if ! kubectl cluster-info &>/dev/null; then
+        log_warning "kubectl not configured properly, attempting to use K3s config..."
+        
+        if [ -f "/etc/rancher/k3s/k3s.yaml" ]; then
+            export KUBECONFIG="/etc/rancher/k3s/k3s.yaml"
+            log_info "Using K3s kubeconfig: $KUBECONFIG"
+            
+            # Test if it works now
+            if ! kubectl cluster-info &>/dev/null; then
+                log_error "Cannot connect to Kubernetes cluster"
+                log_info "Try running: sudo chmod 644 /etc/rancher/k3s/k3s.yaml"
+                exit 1
+            fi
+        else
+            log_error "No kubeconfig found. Please ensure K3s is installed and running."
+            exit 1
+        fi
+    fi
+    
+    log_success "Kubernetes connection verified"
+}
+
 # Main deployment function
 main() {
     log_info "Starting Kubernetes deployment for Minecraft Cluster..."
+    
+    # Setup kubeconfig first
+    setup_kubeconfig
 
     # Create Namespace
     log_info "Creating namespace 'minecraft-cluster'..."
