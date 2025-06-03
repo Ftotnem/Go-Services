@@ -45,14 +45,8 @@ check_ipv6_support() {
 # Function to create IPv6 Redis values
 create_redis_ipv6_values() {
     log_info "Creating Redis IPv6 configuration..."
-    
-    cat > ./redis-ipv6-values.yaml << EOF
-# Simplified IPv6 and dual-stack configuration for Redis Cluster
-global:
-  storageClass: "local-path"
-
+    cat <<EOF > redis-ipv6-values.yaml
 redis:
-  # Configure Redis to bind to both IPv4 and IPv6
   configmap: |
     bind 0.0.0.0 ::
     port 6379
@@ -61,252 +55,279 @@ redis:
     cluster-config-file nodes.conf
     cluster-node-timeout 5000
     appendonly yes
-  
-  # Environment variables for better hostname support
   extraEnvVars:
-    - name: REDIS_CLUSTER_ANNOUNCE_HOSTNAME
-      value: "true"
-
-# Service configuration for dual-stack (simplified)
-service:
-  type: ClusterIP
-
-# Headless service for cluster formation
-headlessService:
-  type: ClusterIP
-
-# Network policy (disabled for compatibility)
+  - name: REDIS_CLUSTER_ANNOUNCE_HOSTNAME
+    value: "true"
+auth:
+  enabled: true
 networkPolicy:
   enabled: false
-
-# Persistence settings
+service:
+  type: ClusterIP
+headlessService:
+  type: ClusterIP
 persistence:
   enabled: true
-  storageClass: "local-path"
   size: 8Gi
-
-# Resource limits
+  storageClass: local-path
+global:
+  storageClass: local-path
 resources:
   limits:
-    memory: 512Mi
     cpu: 500m
+    memory: 512Mi
   requests:
-    memory: 256Mi
     cpu: 100m
+    memory: 256Mi
 EOF
+    log_success "Generated redis-ipv6-values.yaml"
 }
 
 # Function to create standard Redis values (IPv4)
 create_redis_standard_values() {
-    log_info "Creating standard Redis configuration..."
-    
-    cat > ./redis-standard-values.yaml << EOF
-# Standard configuration for Redis Cluster
-global:
-  storageClass: "local-path"
-
-# Persistence settings
-persistence:
+    log_info "Creating Redis standard (IPv4) configuration..."
+    cat <<EOF > redis-standard-values.yaml
+redis:
+  configmap: |
+    bind 0.0.0.0
+    port 6379
+    protected-mode yes
+    cluster-enabled yes
+    cluster-config-file nodes.conf
+    cluster-node-timeout 5000
+    appendonly yes
+  extraEnvVars:
+  - name: REDIS_CLUSTER_ANNOUNCE_HOSTNAME
+    value: "true"
+auth:
   enabled: true
-  storageClass: "local-path"
-  size: 8Gi
-
-# Resource limits (adjust as needed)
-resources:
-  limits:
-    memory: 512Mi
-    cpu: 500m
-  requests:
-    memory: 256Mi
-    cpu: 100m
-
-# Network policy
 networkPolicy:
   enabled: false
+service:
+  type: ClusterIP
+headlessService:
+  type: ClusterIP
+persistence:
+  enabled: true
+  size: 8Gi
+  storageClass: local-path
+global:
+  storageClass: local-path
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 256Mi
 EOF
+    log_success "Generated redis-standard-values.yaml"
 }
 
-# Function to deploy Redis with appropriate configuration
+
+# Function to deploy Redis Cluster
 deploy_redis_cluster() {
-    log_info "Deploying Redis Cluster using Bitnami Helm chart..."
+    log_info "Deploying Redis Cluster..."
+    
+    # Add Bitnami Helm repository
+    helm repo add bitnami https://charts.bitnami.com/bitnami --force-update &> /dev/null
+    helm repo update &> /dev/null
+    log_success "Bitnami Helm repository added and updated."
 
-    # Add Bitnami Helm repository (if not already added)
-    helm repo add bitnami https://charts.bitnami.com/bitnami 2>/dev/null || log_info "Bitnami repo already added."
-
-    # Update Helm repositories
-    helm repo update
-
-    # Check for existing Redis secret
-    REDIS_SECRET_NAME="redis-cluster"
-    REDIS_PASSWORD_KEY="redis-password"
-    REDIS_CURRENT_PASSWORD=""
-
-    if kubectl get secret "$REDIS_SECRET_NAME" -n minecraft-cluster &> /dev/null; then
-        log_info "Existing Redis secret '$REDIS_SECRET_NAME' found. Retrieving current password..."
-        REDIS_CURRENT_PASSWORD=$(kubectl get secret "$REDIS_SECRET_NAME" -n minecraft-cluster -o jsonpath="{.data.$REDIS_PASSWORD_KEY}" | base64 -d)
-        log_success "Using existing Redis password for upgrade."
+    # Check if redis-cluster secret exists and get password for upgrades
+    local REDIS_PASSWORD_ARG=""
+    if kubectl get secret --namespace "${NAMESPACE}" redis-cluster &> /dev/null; then
+        log_info "Redis secret already exists, reusing password for upgrade."
+        REDIS_PASSWORD_ARG="--set auth.existingSecret=redis-cluster"
     else
-        log_info "No existing Redis secret found. Helm will generate a new password on first install."
+        log_info "Redis secret does not exist, creating new password."
     fi
 
-    # Construct password argument
-    REDIS_PASSWORD_SET_ARG=""
-    if [ -n "$REDIS_CURRENT_PASSWORD" ]; then
-        REDIS_PASSWORD_SET_ARG="--set auth.password=$REDIS_CURRENT_PASSWORD"
-    fi
-
-    # Determine which values file to use based on IPv6 support
+    # Force standard IPv4 configuration for testing
+    create_redis_standard_values # This creates ./redis-standard-values.yaml
     VALUES_FILE="./redis-standard-values.yaml"
-    if check_ipv6_support; then
-        create_redis_ipv6_values
-        VALUES_FILE="./redis-ipv6-values.yaml"
-        log_info "Using IPv6-enabled Redis configuration"
-    else
-        create_redis_standard_values
-        log_info "Using standard Redis configuration"
-    fi
+    log_info "Forcing standard Redis configuration (IPv4) for testing."
 
-    # Deploy Redis cluster
-    log_info "Installing/Upgrading Redis Cluster Helm release..."
-    helm upgrade --install redis-cluster bitnami/redis-cluster \
-      --namespace minecraft-cluster \
-      --values "$VALUES_FILE" \
-      --set auth.enabled=true \
-      $REDIS_PASSWORD_SET_ARG \
-      --wait \
-      --timeout 600s
-
+    # Deploy or upgrade the Redis cluster using Helm
+    log_info "Running helm upgrade --install redis-cluster bitnami/redis-cluster -n ${NAMESPACE} -f ${VALUES_FILE} ${REDIS_PASSWORD_ARG} --timeout 10m"
+    helm upgrade --install redis-cluster bitnami/redis-cluster -n "${NAMESPACE}" -f "${VALUES_FILE}" ${REDIS_PASSWORD_ARG} --timeout 10m
+    log_success "Redis Cluster deployment initiated."
+    
     # Clean up temporary files
-    rm -f ./redis-ipv6-values.yaml ./redis-standard-values.yaml
-
-    log_success "Redis Cluster deployed successfully!"
-}
-
-# Function to wait for deployment with better feedback
-wait_for_deployment() {
-    local app_name=$1
-    local timeout=${2:-300}
-    
-    log_info "Waiting for $app_name pods to be ready (timeout: ${timeout}s)..."
-    
-    if kubectl wait --namespace minecraft-cluster --for=condition=ready pod -l app="$app_name" --timeout="${timeout}s"; then
-        log_success "$app_name pods are ready!"
-    else
-        log_error "Timeout waiting for $app_name pods to be ready"
-        log_info "Pod status for $app_name:"
-        kubectl get pods -n minecraft-cluster -l app="$app_name"
-        return 1
+    if [ -f "redis-ipv6-values.yaml" ]; then
+        rm redis-ipv6-values.yaml
+    fi
+    if [ -f "redis-standard-values.yaml" ]; then
+        rm redis-standard-values.yaml
     fi
 }
 
-# Function to verify deployment
+# Function to wait for deployment
+wait_for_deployment() {
+    local DEPLOYMENT_NAME=$1
+    local NAMESPACE=$2
+    local TIMEOUT=${3:-300} # Default timeout to 300 seconds (5 minutes)
+    local START_TIME=$(date +%s)
+
+    log_info "Waiting for pods in deployment/daemonset '${DEPLOYMENT_NAME}' in namespace '${NAMESPACE}' to be ready (timeout: ${TIMEOUT}s)..."
+
+    while true; do
+        CURRENT_TIME=$(date +%s)
+        ELAPSED_TIME=$((CURRENT_TIME - START_TIME))
+
+        if [ "$ELAPSED_TIME" -ge "$TIMEOUT" ]; then
+            log_error "Timeout: Pods for '${DEPLOYMENT_NAME}' did not become ready within ${TIMEOUT} seconds."
+            kubectl get pods -l app=${DEPLOYMENT_NAME} -n ${NAMESPACE}
+            return 1
+        fi
+
+        READY_PODS=$(kubectl get pods -l app=${DEPLOYMENT_NAME} -n ${NAMESPACE} -o json | jq -r '.items[] | select(.status.phase == "Running" and .status.containerStatuses[]?.ready == true) | .metadata.name' | wc -l)
+        TOTAL_PODS=$(kubectl get pods -l app=${DEPLOYMENT_NAME} -n ${NAMESPACE} -o json | jq -r '.items | length')
+
+        if [ "$TOTAL_PODS" -gt 0 ] && [ "$READY_PODS" -eq "$TOTAL_PODS" ]; then
+            log_success "All ${READY_PODS} pods for '${DEPLOYMENT_NAME}' are ready!"
+            return 0
+        elif [ "$TOTAL_PODS" -eq 0 ]; then
+            log_warning "No pods found for deployment '${DEPLOYMENT_NAME}' yet. Retrying..."
+        else
+            log_info "Waiting for pods in '${DEPLOYMENT_NAME}' to be ready... (${READY_PODS}/${TOTAL_PODS} ready) - Elapsed: ${ELAPSED_TIME}s"
+        fi
+        sleep 5
+    done
+}
+
+
+# Function to verify deployment status
 verify_deployment() {
     log_info "Verifying deployment status..."
-    
     echo ""
-    log_info "=== Deployment Summary ==="
-    kubectl get pods -n minecraft-cluster -o wide
+    log_info "--- Pod Status ---"
+    kubectl get pods -n minecraft-cluster
+
     echo ""
-    kubectl get services -n minecraft-cluster
+    log_info "--- Service Status ---"
+    kubectl get svc -n minecraft-cluster
+
     echo ""
-    
-    # Check if any pods are not running
-    NOT_RUNNING=$(kubectl get pods -n minecraft-cluster --field-selector=status.phase!=Running --no-headers 2>/dev/null | wc -l)
-    if [ "$NOT_RUNNING" -gt 0 ]; then
-        log_warning "Some pods are not in Running state:"
-        kubectl get pods -n minecraft-cluster --field-selector=status.phase!=Running
+    log_info "--- Ingress Status ---"
+    kubectl get ing -n minecraft-cluster || log_warning "No Ingress resources found."
+
+    echo ""
+    log_info "--- Events (last 5 minutes) ---"
+    kubectl get events -n minecraft-cluster --sort-by='.lastTimestamp' --since=5m
+
+    echo ""
+    log_info "--- Unhealthy Pods ---"
+    UNHEALTHY_PODS=$(kubectl get pods -n minecraft-cluster --field-selector=status.phase!=Running -o wide --no-headers || true)
+    if [ -z "$UNHEALTHY_PODS" ]; then
+        log_success "All pods are in 'Running' state."
+    else
+        log_warning "The following pods are not in 'Running' state:"
+        echo "$UNHEALTHY_PODS"
     fi
 }
 
-# Function to setup kubeconfig
-setup_kubeconfig() {
-    # Check if we have a working kubeconfig
-    if ! kubectl cluster-info &>/dev/null; then
-        log_warning "kubectl not configured properly, attempting to use K3s config..."
-        
-        if [ -f "/etc/rancher/k3s/k3s.yaml" ]; then
-            export KUBECONFIG="/etc/rancher/k3s/k3s.yaml"
-            log_info "Using K3s kubeconfig: $KUBECONFIG"
-            
-            # Test if it works now
-            if ! kubectl cluster-info &>/dev/null; then
-                log_error "Cannot connect to Kubernetes cluster"
-                log_info "Try running: sudo chmod 644 /etc/rancher/k3s/k3s.yaml"
-                exit 1
-            fi
-        else
-            log_error "No kubeconfig found. Please ensure K3s is installed and running."
-            exit 1
-        fi
-    fi
-    
-    log_success "Kubernetes connection verified"
-}
 
 # Main deployment function
 main() {
-    log_info "Starting Kubernetes deployment for Minecraft Cluster..."
-    
-    # Setup kubeconfig first
+    log_info "Starting Minecraft Cluster deployment..."
+
+    # Ensure kubeconfig is set up
     setup_kubeconfig
 
-    # Create Namespace
-    log_info "Creating namespace 'minecraft-cluster'..."
+    # Create namespace
+    log_info "Creating 'minecraft-cluster' namespace..."
     kubectl apply -f namespace.yaml
+    log_success "Namespace 'minecraft-cluster' created/ensured."
 
     # Deploy Redis Cluster
     deploy_redis_cluster
+    wait_for_deployment redis-cluster minecraft-cluster 600 # 10 minutes timeout
 
     # Deploy MongoDB
     log_info "Deploying MongoDB..."
     kubectl apply -f mongodb.yaml
-    wait_for_deployment "mongodb"
+    log_success "MongoDB deployment initiated."
+    wait_for_deployment mongodb-deployment minecraft-cluster
 
     # Deploy Player Service
     log_info "Deploying Player Service..."
     kubectl apply -f player-service.yaml
-    wait_for_deployment "player-service"
+    log_success "Player Service deployment initiated."
+    wait_for_deployment player-service minecraft-cluster
 
     # Deploy Game Service
     log_info "Deploying Game Service..."
     kubectl apply -f game-service.yaml
-    wait_for_deployment "game-service"
+    log_success "Game Service deployment initiated."
+    wait_for_deployment game-service minecraft-cluster
 
     # Deploy Gate Proxy
     log_info "Deploying Gate Proxy..."
     kubectl apply -f gate.yaml
-    wait_for_deployment "gate-proxy"
+    log_success "Gate Proxy deployment initiated."
+    wait_for_deployment gate-proxy-deployment minecraft-cluster
 
-    # Deploy Minestom Servers
+    # Deploy Minestom Servers (assuming this is a DaemonSet or Deployment)
     log_info "Deploying Minestom Servers..."
     kubectl apply -f minestom.yaml
-    wait_for_deployment "minestom-server"
+    log_success "Minestom Servers deployment initiated."
+    wait_for_deployment minestom-server minecraft-cluster # Adjust label selector if different
 
-    # Verify deployment
+    log_success "Minecraft Cluster deployment complete!"
+    echo ""
     verify_deployment
+    echo ""
+    log_info "=== Useful Commands ===
+To get the external IP for the Gate Proxy:
+  kubectl get svc gate-proxy-service -n minecraft-cluster
 
-    log_success "All services deployed successfully!"
-    
-    echo ""
-    log_info "=== Useful Commands ==="
-    echo "To get the external IP for the Gate Proxy:"
-    echo "  kubectl get svc gate-proxy-service -n minecraft-cluster"
-    echo ""
-    echo "To connect to Redis cluster:"
-    echo "  export REDIS_PASSWORD=\$(kubectl get secret --namespace minecraft-cluster redis-cluster -o jsonpath=\"{.data.redis-password}\" | base64 -d)"
-    echo "  kubectl run --namespace minecraft-cluster redis-client --rm --tty -i --restart='Never' --image docker.io/bitnami/redis-cluster:7.2.4-debian-12-r11 -- bash"
-    echo "  # Inside container: redis-cli -c -a \$REDIS_PASSWORD -h redis-cluster"
-    echo ""
-    echo "To check IPv6 connectivity:"
-    echo "  kubectl exec -it deployment/redis-cluster -n minecraft-cluster -- redis-cli cluster nodes"
+To connect to Redis cluster:
+  export REDIS_PASSWORD=\$(kubectl get secret --namespace minecraft-cluster redis-cluster -o jsonpath=\"{.data.redis-password}\" | base64 -d)
+  kubectl run --namespace minecraft-cluster redis-client --rm --tty -i --restart='Never' --image docker.io/bitnami/redis-cluster:7.2.4-debian-12-r11 -- bash
+  # Inside container: redis-cli -c -a \$REDIS_PASSWORD -h redis-cluster
+
+To check IPv6 connectivity:
+  kubectl exec -it deployment/redis-cluster -n minecraft-cluster -- redis-cli cluster nodes
+"
 }
+
+# Function to setup kubeconfig
+setup_kubeconfig() {
+    if kubectl config current-context &> /dev/null; then
+        log_success "Kubeconfig is already set up and a current context is active."
+    else
+        log_warning "No current kubeconfig context found. Attempting to use K3s default."
+        if [ -f "/etc/rancher/k3s/k3s.yaml" ]; then
+            export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+            log_info "KUBECONFIG set to /etc/rancher/k3s/k3s.yaml."
+            if ! kubectl config current-context &> /dev/null; then
+                log_error "Failed to set KUBECONFIG with /etc/rancher/k3s/k3s.yaml. Check permissions or if K3s is running."
+                log_info "Hint: You might need to run 'sudo chmod 644 /etc/rancher/k3s/k3s.yaml' or 'sudo chown \$USER:\$USER /etc/rancher/k3s/k3s.yaml'"
+                exit 1
+            else
+                log_success "Kubeconfig successfully set using K3s default."
+            fi
+        else
+            log_error "No kubeconfig found and K3s default '/etc/rancher/k3s/k3s.yaml' does not exist."
+            log_error "Please ensure kubectl is configured to connect to your Kubernetes cluster."
+            exit 1
+        fi
+    fi
+}
+
 
 # Handle script arguments
 case "${1:-}" in
     --dry-run)
         log_info "Dry run mode - showing what would be deployed"
         kubectl apply --dry-run=client -f namespace.yaml
-        check_ipv6_support
+        # For dry-run, we won't actually call deploy_redis_cluster, but we can simulate the values file creation
+        create_redis_standard_values # Ensure the IPv4 values file is created for inspection
+        log_info "Dry-run for Redis values file: redis-standard-values.yaml"
+        # If you want to see the IPv6 values in dry-run for completeness, uncomment the next two lines
+        # create_redis_ipv6_values
+        # log_info "Dry-run for Redis values file: redis-ipv6-values.yaml"
         ;;
     --verify)
         log_info "Verification mode - checking deployment status"
@@ -317,9 +338,7 @@ case "${1:-}" in
         echo "Options:"
         echo "  --dry-run    Show what would be deployed without applying"
         echo "  --verify     Check the status of deployed resources"
-        echo "  --help, -h   Show this help message"
-        echo ""
-        echo "Default: Deploy all resources"
+        echo "  --help|-h    Display this help message"
         ;;
     *)
         main
