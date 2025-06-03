@@ -47,7 +47,7 @@ create_redis_ipv6_values() {
     log_info "Creating Redis IPv6 configuration..."
     
     cat > ./redis-ipv6-values.yaml << EOF
-# IPv6 and dual-stack configuration for Redis Cluster
+# Simplified IPv6 and dual-stack configuration for Redis Cluster
 global:
   storageClass: "local-path"
 
@@ -57,46 +57,25 @@ redis:
     bind 0.0.0.0 ::
     port 6379
     protected-mode yes
-    tcp-keepalive 60
-    tcp-backlog 511
     cluster-enabled yes
     cluster-config-file nodes.conf
     cluster-node-timeout 5000
     appendonly yes
-    # Prefer hostname for cluster communication
-    cluster-prefer-endpoint-ip no
   
-  # Environment variables for better IPv6 support
+  # Environment variables for better hostname support
   extraEnvVars:
     - name: REDIS_CLUSTER_ANNOUNCE_HOSTNAME
       value: "true"
-    - name: REDIS_CLUSTER_PREFERRED_ENDPOINT_TYPE
-      value: "hostname"
-    - name: REDIS_CLUSTER_DYNAMIC_IPS
-      value: "no"
 
-# Service configuration for dual-stack
+# Service configuration for dual-stack (simplified)
 service:
   type: ClusterIP
-  ipFamilyPolicy: PreferDualStack
-  ipFamilies:
-    - IPv6
-    - IPv4
 
 # Headless service for cluster formation
 headlessService:
-  ipFamilyPolicy: PreferDualStack
-  ipFamilies:
-    - IPv6
-    - IPv4
+  type: ClusterIP
 
-# Pod configuration
-podSecurityContext:
-  sysctls:
-    - name: net.ipv6.conf.all.disable_ipv6
-      value: "0"
-
-# Network policy (disabled for IPv6 compatibility)
+# Network policy (disabled for compatibility)
 networkPolicy:
   enabled: false
 
@@ -106,7 +85,7 @@ persistence:
   storageClass: "local-path"
   size: 8Gi
 
-# Resource limits (adjust as needed)
+# Resource limits
 resources:
   limits:
     memory: 512Mi
