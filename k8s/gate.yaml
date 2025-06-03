@@ -65,3 +65,6 @@ spec:
       port: 25565
       targetPort: 25565
   type: LoadBalancer # This will request an IP from Metallb
+  ipFamilyPolicy: SingleStack
+  ipFamilies:
+    - IPv6
