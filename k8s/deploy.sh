@@ -3,6 +3,10 @@
 # Exit immediately if a command exits with a non-zero status.
 set -e
 
+# --- Global Variables ---
+NAMESPACE="minecraft-cluster" # Define the target namespace globally
+
+
 # Color output for better readability
 RED='\033[0;31m'
 GREEN='\033[0;32m'
