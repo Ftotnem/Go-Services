@@ -134,13 +134,21 @@ deploy_redis_cluster() {
     helm repo update &> /dev/null
     log_success "Bitnami Helm repository added and updated."
 
-    # Check if redis-cluster secret exists and get password for upgrades
     local REDIS_PASSWORD_ARG=""
+    local EXISTING_REDIS_PASSWORD=""
+
+    # Check if redis-cluster secret exists and retrieve password for upgrades
     if kubectl get secret --namespace "${NAMESPACE}" redis-cluster &> /dev/null; then
-        log_info "Redis secret already exists, reusing password for upgrade."
-        REDIS_PASSWORD_ARG="--set auth.existingSecret=redis-cluster"
+        log_info "Redis secret already exists, attempting to retrieve password for upgrade."
+        EXISTING_REDIS_PASSWORD=$(kubectl get secret --namespace "${NAMESPACE}" redis-cluster -o jsonpath="{.data.redis-password}" | base64 -d)
+        if [ -n "$EXISTING_REDIS_PASSWORD" ]; then
+            REDIS_PASSWORD_ARG="--set password=${EXISTING_REDIS_PASSWORD}"
+            log_success "Existing Redis password retrieved."
+        else
+            log_warning "Could not retrieve existing Redis password. Helm upgrade might fail if 'auth.enabled' is true."
+        fi
     else
-        log_info "Redis secret does not exist, creating new password."
+        log_info "Redis secret does not exist, a new password will be generated."
     fi
 
     # Force standard IPv4 configuration for testing
@@ -181,8 +189,18 @@ wait_for_deployment() {
             return 1
         fi
 
-        READY_PODS=$(kubectl get pods -l app=${DEPLOYMENT_NAME} -n ${NAMESPACE} -o json | jq -r '.items[] | select(.status.phase == "Running" and .status.containerStatuses[]?.ready == true) | .metadata.name' | wc -l)
-        TOTAL_PODS=$(kubectl get pods -l app=${DEPLOYMENT_NAME} -n ${NAMESPACE} -o json | jq -r '.items | length')
+        # Adjust label selector for Redis-cluster if it's not simply 'app=redis-cluster'
+        # For Bitnami Redis cluster, label is typically 'app.kubernetes.io/name=redis-cluster'
+        # For other deployments, stick to 'app=' or customize.
+        local LABEL_SELECTOR=""
+        if [[ "$DEPLOYMENT_NAME" == "redis-cluster" ]]; then
+            LABEL_SELECTOR="app.kubernetes.io/name=redis-cluster"
+        else
+            LABEL_SELECTOR="app=${DEPLOYMENT_NAME}"
+        fi
+
+        READY_PODS=$(kubectl get pods -l "${LABEL_SELECTOR}" -n "${NAMESPACE}" -o json | jq -r '.items[] | select(.status.phase == "Running" and .status.containerStatuses[]?.ready == true) | .metadata.name' | wc -l)
+        TOTAL_PODS=$(kubectl get pods -l "${LABEL_SELECTOR}" -n "${NAMESPACE}" -o json | jq -r '.items | length')
 
         if [ "$TOTAL_PODS" -gt 0 ] && [ "$READY_PODS" -eq "$TOTAL_PODS" ]; then
             log_success "All ${READY_PODS} pods for '${DEPLOYMENT_NAME}' are ready!"
