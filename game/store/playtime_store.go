@@ -121,7 +121,6 @@ func (pps *PlayerPlaytimeStore) IncrementPlayerPlaytime(ctx context.Context, pla
 		if playerIncrCmd.Err() != nil {
 			return fmt.Errorf("player total playtime increment failed for player %s (no team found): %w", playerUUID, playerIncrCmd.Err())
 		}
-		log.Printf("Incremented total playtime for player %s by %.2f. New total: %.2f. Delta consumed.", playerUUID, deltaFloat, playerIncrCmd.Val())
 		return nil
 	}
 	if err != nil {
@@ -149,9 +148,6 @@ func (pps *PlayerPlaytimeStore) IncrementPlayerPlaytime(ctx context.Context, pla
 	if teamIncrCmd.Err() != nil {
 		return fmt.Errorf("team total playtime increment failed for team %s: %w", teamID, teamIncrCmd.Err())
 	}
-
-	log.Printf("Successfully incremented total playtime for player %s by %.2f (new player total: %.2f) and team %s by %.2f (new team total: %.2f). Delta consumed.",
-		playerUUID, deltaFloat, playerIncrCmd.Val(), teamID, deltaFloat, teamIncrCmd.Val())
 
 	return nil
 }

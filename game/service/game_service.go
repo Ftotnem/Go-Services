@@ -71,7 +71,7 @@ func (gs *GameService) PlayerOnline(ctx context.Context, playerUUID string) erro
 		// No team key set if profile not found
 	} else {
 		// Profile found, set values from DB
-		if err = gs.PlayerPlaytimeStore.SetPlayerPlaytime(ctx, playerUUID, playerProfile.TotalPlaytime); err != nil {
+		if err = gs.PlayerPlaytimeStore.SetPlayerPlaytime(ctx, playerUUID, playerProfile.CurrentPlaytime); err != nil {
 			return fmt.Errorf("failed to set total playtime for %s from profile: %w", playerUUID, err)
 		}
 		// Delta playtime is always 1.0 on going online, according to previous logic

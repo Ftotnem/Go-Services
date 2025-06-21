@@ -31,10 +31,10 @@ func (ts *TeamStore) EnsureTeamsExist(ctx context.Context, teams []string) error
 		filter := bson.M{"_id": teamName}
 		update := bson.M{
 			"$setOnInsert": bson.M{
-				"player_count":         0,
-				"total_playtime_ticks": 0.0,
-				"created_at":           time.Now(),
-				"last_updated":         time.Now(),
+				"player_count":   0,
+				"total_playtime": 0.0,
+				"created_at":     time.Now(),
+				"last_updated":   time.Now(),
 			},
 		}
 		opts := options.Update().SetUpsert(true)
@@ -103,7 +103,7 @@ func (ts *TeamStore) DecrementTeamPlayerCount(ctx context.Context, teamName stri
 func (ts *TeamStore) UpdateTeamTotalPlaytime(ctx context.Context, teamName string, newTotalPlaytime float64) error {
 	filter := bson.M{"_id": teamName}
 	update := bson.M{
-		"$set": bson.M{"total_playtime_ticks": newTotalPlaytime, "last_updated": time.Now()},
+		"$set": bson.M{"total_playtime": newTotalPlaytime, "last_updated": time.Now()},
 	}
 	opts := options.Update().SetUpsert(true) // SetUpsert(true) here is crucial for aggregation updates
 	res, err := ts.collection.UpdateOne(ctx, filter, update, opts)
@@ -129,4 +129,30 @@ func (ts *TeamStore) GetAllTeams(ctx context.Context) ([]models.Team, error) {
 		return nil, fmt.Errorf("failed to decode all teams: %w", err)
 	}
 	return teams, nil
+}
+
+// IncrementTeamPlayerCountAndGet atomically increments the player_count for a team
+// and returns the *new* incremented count. This is crucial for assigning unique TeamUsernames.
+func (ts *TeamStore) IncrementTeamPlayerCountAndGet(ctx context.Context, teamName string) (int64, error) {
+	filter := bson.M{"_id": teamName}
+	update := bson.M{
+		"$inc": bson.M{"player_count": 1},
+		"$set": bson.M{"last_updated": time.Now()}, // Also update last_updated timestamp
+	}
+	// Configure options to return the document *after* the update.
+	opts := options.FindOneAndUpdate().SetReturnDocument(options.After).SetUpsert(true)
+
+	var updatedTeam models.Team
+	err := ts.collection.FindOneAndUpdate(ctx, filter, update, opts).Decode(&updatedTeam)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			// This case should ideally not happen if EnsureTeamsExist is called,
+			// but if it does, you might want to return an error indicating team not found.
+			// However, since SetUpsert(true) is used, it will create the team if not found,
+			// so this error indicates something else went wrong during the find or update.
+			return 0, fmt.Errorf("team %s not found for increment or failed to upsert: %w", teamName, err)
+		}
+		return 0, fmt.Errorf("failed to atomically increment and get player count for team %s: %w", teamName, err)
+	}
+	return updatedTeam.PlayerCount, nil
 }

@@ -55,7 +55,7 @@ func LoadCommonConfig() (CommonConfig, error) {
 	// Redis Addresses
 	redisAddrsStr := os.Getenv("REDIS_ADDRS")
 	if redisAddrsStr == "" {
-		cfg.RedisAddrs = []string{"redis-cluster-headless.minecraft-cluster.svc.cluster.local:6379"} // Default for K8s Service
+		cfg.RedisAddrs = []string{"0.0.0.0:7000", "0.0.0.0:7001", "0.0.0.0:7002", "0.0.0.0:7003", "0.0.0.0:7004", "0.0.0.0:7005"} // Default for K8s Service
 	} else {
 		for _, addr := range strings.Split(redisAddrsStr, ",") {
 			cfg.RedisAddrs = append(cfg.RedisAddrs, strings.TrimSpace(addr))
@@ -151,7 +151,7 @@ func LoadGameServiceConfig() (*GameServiceConfig, error) {
 		cfg.ListenAddr = ":8082"
 	}
 	if cfg.PlayerServiceURL == "" {
-		cfg.PlayerServiceURL = "http://player-service:8081" // Default for K8s internal DNS
+		cfg.PlayerServiceURL = "http://localhost:8081" //"http://player-service:8081" // Default for K8s internal DNS
 	}
 
 	// Extract ServicePort from ListenAddr
@@ -219,7 +219,7 @@ func LoadPlayerServiceConfig() (*PlayerServiceConfig, error) {
 		MongoDBDatabase:          os.Getenv("MONGODB_DATABASE"),
 		MongoDBPlayersCollection: os.Getenv("MONGODB_PLAYERS_COLLECTION"),
 		MongoDBTeamCollection:    os.Getenv("MONGODB_TEAM_COLLECTION"),
-		DefaultTeams:             []string{"AQUA_CREEPERS", "PURPLE_SWORDERS"},
+		DefaultTeams:             []string{"AQUA_CREEPERS", "PURPLE_AXOLOTLS"},
 	}
 
 	// Apply defaults
@@ -227,10 +227,10 @@ func LoadPlayerServiceConfig() (*PlayerServiceConfig, error) {
 		cfg.ListenAddr = ":8081"
 	}
 	if cfg.MongoDBConnStr == "" {
-		cfg.MongoDBConnStr = "mongodb://mongodb-service:27017" // Default for K8s Service mongodb://mongodb-service:27017
+		cfg.MongoDBConnStr = "mongodb://localhost:27017" //"mongodb://mongodb-service:27017" // Default for K8s Service mongodb://mongodb-service:27017
 	}
 	if cfg.MongoDBDatabase == "" {
-		cfg.MongoDBDatabase = "minestom"
+		cfg.MongoDBDatabase = "test"
 	}
 	if cfg.MongoDBPlayersCollection == "" {
 		cfg.MongoDBPlayersCollection = "players"

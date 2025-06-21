@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"strings"
 	"time"
 
 	"github.com/Ftotnem/GO-SERVICES/player/mojang"
@@ -37,17 +38,67 @@ func NewPlayerService(ps *store.PlayerStore, ts *store.TeamStore, ms *mojang.Moj
 	}
 }
 
+// generateTeamUsername determines the next sequential team-based username for a given team.
+// It increments the team's player count and uses that as the suffix.
+func (ps *PlayerService) generateTeamUsername(ctx context.Context, teamName string) (string, error) {
+	// Increment the team's player count and get the new count.
+	// This should be an atomic operation in your TeamStore.
+	newCount, err := ps.teamStore.IncrementTeamPlayerCountAndGet(ctx, teamName)
+	if err != nil {
+		return "", fmt.Errorf("failed to get and increment player count for team %s: %w", teamName, err)
+	}
+
+	// Determine the base creature name (e.g., "CREEPER", "AXOLOTL")
+	// and then format it.
+	var baseName string
+	switch teamName {
+	case "AQUA_CREEPERS":
+		baseName = "Creeper"
+	case "PURPLE_AXOLOTLS":
+		baseName = "Axolotl"
+	// Add more cases here if you introduce other teams
+	default:
+		// Fallback for unexpected team names,
+		// or if you want to derive it dynamically from the last part of the teamName
+		parts := strings.Split(teamName, "_")
+		if len(parts) > 0 {
+			// Take the last part, convert to title case (e.g., AXOLOTLS -> Axolotls)
+			lastPart := strings.ToLower(parts[len(parts)-1])
+			// Trim 's' if it's there
+			lastPart = strings.TrimSuffix(lastPart, "s")
+			// Capitalize first letter
+			if len(lastPart) > 0 {
+				baseName = strings.ToUpper(string(lastPart[0])) + lastPart[1:]
+			} else {
+				baseName = "Player" // Default if all else fails
+			}
+		} else {
+			baseName = "Player" // Default if teamName is empty or malformed
+		}
+	}
+
+	return fmt.Sprintf("%s%d", baseName, newCount), nil
+}
+
 // CreateProfile handles the creation of a new player profile, including team assignment and username lookup.
 func (ps *PlayerService) CreateProfile(ctx context.Context, playerUUID string) (*models.Player, error) {
 	now := time.Now()
 
+	// 1. Check if profile already exists early to avoid unnecessary work
+	_, err := ps.playerStore.GetPlayerByUUID(ctx, playerUUID)
+	if err == nil { // Profile found
+		return nil, ErrProfileAlreadyExists
+	}
+	if err != mongo.ErrNoDocuments { // Other error during lookup
+		return nil, fmt.Errorf("service failed to check existing profile: %w", err)
+	}
+	// If mongo.ErrNoDocuments, proceed with creation
+
 	// --- Team Assignment Logic (from your original code) ---
-	// This business logic belongs in the service layer.
 	allTeams, err := ps.teamStore.GetAllTeams(ctx) // Get all teams from store
 	if err != nil {
 		log.Printf("ERROR: Could not retrieve all teams for assignment: %v. Proceeding with random assignment fallback.", err)
-		// Fallback to hardcoded list if DB call fails
-		allTeams = []models.Team{{Name: "AQUA_CREEPERS"}, {Name: "PURPLE_SWORDERS"}} // Fallback teams
+		allTeams = []models.Team{{Name: "AQUA_CREEPERS"}, {Name: "PURPLE_AXOLOTLS"}} // Fallback teams
 	}
 
 	var assignedTeamName string
@@ -85,40 +136,35 @@ func (ps *PlayerService) CreateProfile(ctx context.Context, playerUUID string) (
 		assignedTeamName = leastPopulatedTeams[rand.Intn(len(leastPopulatedTeams))]
 		log.Printf("INFO: Assigned player %s to team %s (least populated).", playerUUID, assignedTeamName)
 	} else {
-		// Fallback: if no teams or all failed, assign randomly from hardcoded list
 		log.Printf("WARN: No valid teams found or all failed to get count. Assigning player %s to random fallback team.", playerUUID)
-		fallbackTeams := []string{"AQUA_CREEPERS", "PURPLE_SWORDERS"} // Ensure these are also in your EnsureTeamsExist
+		fallbackTeams := []string{"AQUA_CREEPERS", "PURPLE_AXOLOTLS"} // Ensure these are also in your EnsureTeamsExist
 		assignedTeamName = fallbackTeams[rand.Intn(len(fallbackTeams))]
 	}
 	// --- End Team Assignment Logic ---
 
+	// Generate the TeamUsername
+	teamUsername, err := ps.generateTeamUsername(ctx, assignedTeamName) // Renamed function call
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate team username: %w", err)
+	}
+	log.Printf("INFO: Assigned team username %s for player %s.", teamUsername, playerUUID)
+
 	newProfile := &models.Player{
-		UUID:          playerUUID,
-		Username:      "", // Placeholder, will be filled by Mojang API asynchronously
-		Team:          assignedTeamName,
-		TotalPlaytime: 0.0,
-		DeltaPlaytime: 1.0,
-		Banned:        false,
-		CreatedAt:     &now,
-		LastLoginAt:   &now,
+		UUID:            playerUUID,
+		Username:        "", // Placeholder, will be filled by Mojang API asynchronously
+		Team:            assignedTeamName,
+		TeamUsername:    teamUsername, // Set the renamed field here
+		CurrentPlaytime: 0.0,
+		DeltaPlaytime:   1.0,
+		Banned:          false,
+		CreatedAt:       &now,
+		LastLoginAt:     &now,
 	}
 
 	err = ps.playerStore.CreatePlayer(ctx, newProfile) // Call the store method
 	if err != nil {
-		if err.Error() == fmt.Sprintf("player profile %s already exists", playerUUID) {
-			return nil, ErrProfileAlreadyExists // Return custom error
-		}
 		return nil, fmt.Errorf("service failed to create player profile: %w", err)
 	}
-
-	// Increment the player count for the assigned team (async is fine here)
-	go func(team string) {
-		teamCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := ps.teamStore.IncrementTeamPlayerCount(teamCtx, team); err != nil {
-			log.Printf("ERROR: Failed to increment player count for team %s after creating profile %s: %v", team, playerUUID, err)
-		}
-	}(assignedTeamName)
 
 	// Asynchronously fetch username for the newly created profile
 	go func(uuid string) {
@@ -138,7 +184,6 @@ func (ps *PlayerService) CreateProfile(ctx context.Context, playerUUID string) (
 			log.Printf("WARN: Failed to update username for player profile %s in DB: %v", uuid, updateErr)
 		} else {
 			log.Printf("INFO: Successfully updated username for player profile %s to %s.", uuid, username)
-			// No need to update newProfile here as response is already sent
 		}
 	}(playerUUID)
 

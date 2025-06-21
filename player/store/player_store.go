@@ -64,9 +64,9 @@ func (ps *PlayerStore) UpdatePlayerUsername(ctx context.Context, uuid, username 
 }
 
 // UpdatePlayerPlaytime updates a player profile's total playtime.
-func (ps *PlayerStore) UpdatePlayerPlaytime(ctx context.Context, uuid string, newTotalPlaytime float64) error {
+func (ps *PlayerStore) UpdatePlayerPlaytime(ctx context.Context, uuid string, newCurrentPlaytime float64) error {
 	filter := bson.M{"_id": uuid}
-	update := bson.M{"$set": bson.M{"total_playtime_ticks": newTotalPlaytime}}
+	update := bson.M{"$set": bson.M{"current_playtime": newCurrentPlaytime}}
 	res, err := ps.collection.UpdateOne(ctx, filter, update)
 	if err != nil {
 		return fmt.Errorf("failed to set playtime for player %s: %w", uuid, err)
@@ -125,7 +125,7 @@ func (ps *PlayerStore) AggregateTeamPlaytimes(ctx context.Context) (map[string]f
 	pipeline := mongo.Pipeline{
 		bson.D{{Key: "$group", Value: bson.D{
 			{Key: "_id", Value: "$team"},
-			{Key: "calculatedTotal", Value: bson.D{{Key: "$sum", Value: "$total_playtime_ticks"}}},
+			{Key: "calculatedTotal", Value: bson.D{{Key: "$sum", Value: "$current_playtime"}}},
 		}}},
 	}
 
